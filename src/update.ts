@@ -54,6 +54,7 @@ export class Updater {
   latest: Release | null = null
   lastCheck = 0
   private repo = UPDATE_REPO // current name on GitHub (follows renames)
+  private notesTag = ''
   lastError: string | null = null
   lastResult: Result | null = null
   busy: 'checking' | 'installing' | 'rollback' | null = null
@@ -179,18 +180,19 @@ export class Updater {
     }
     if (!m) throw new Error(`GitHub ${r.status}`)
     const tag = decodeURIComponent(m[2])
-    if (this.latest?.tag !== tag) {
+    if (this.latest?.tag !== tag || this.notesTag !== tag) {
       this.latest = { version: tag.replace(/^v/, ''), tag, url: `https://github.com/${this.repo}/releases/tag/${encodeURIComponent(tag)}`, notes: '', published: '' }
-      await this.readNotes(this.latest).catch(() => undefined)
+      // GitHub's feed can lag a minute behind a new release: retried on the next checks until found
+      if (await this.readNotes(this.latest).catch(() => false)) this.notesTag = tag
     }
     this.lastError = null
     return this.latest
   }
 
   /** Release notes and date from the releases Atom feed (also outside the REST API limit). */
-  private async readNotes(rel: Release): Promise<void> {
+  private async readNotes(rel: Release): Promise<boolean> {
     const r = await fetch(`https://github.com/${this.repo}/releases.atom`, { headers: { 'user-agent': `WhatsOps/${VERSION}` }, signal: AbortSignal.timeout(15_000) })
-    if (!r.ok) return
+    if (!r.ok) return false
     const xml = await r.text()
     for (const entry of xml.split('<entry>').slice(1)) {
       if (!entry.includes(`/releases/tag/${encodeURIComponent(rel.tag)}"`) && !entry.includes(`/releases/tag/${rel.tag}"`)) continue
@@ -201,8 +203,9 @@ export class Updater {
         .trim()
         .slice(0, 4000)
       rel.published = entry.match(/<updated>([^<]+)<\/updated>/)?.[1] ?? ''
-      return
+      return true
     }
+    return false
   }
 
   private async tick(): Promise<void> {
