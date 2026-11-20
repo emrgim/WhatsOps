@@ -183,6 +183,12 @@ function openProfile(id) {
   $('#profDlg').showModal()
 }
 const fileToDataUrl = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f) })
+// preview the chosen photo before it is sent to WhatsApp
+$('#profForm').photo.addEventListener('change', run(async (e) => {
+  const f = e.target.files[0]
+  if (!f) return
+  $('#profAvatar').outerHTML = `<img class="avatar big" id="profAvatar" alt="" src="${await fileToDataUrl(f)}">`
+}))
 $('#profRemovePhoto').addEventListener('click', run(async () => {
   if (!confirm(t('prof.confirmRemove'))) return
   await api('DELETE', `/v1/accounts/${encodeURIComponent(profId)}/profile/photo`)
