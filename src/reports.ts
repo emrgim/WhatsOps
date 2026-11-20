@@ -22,7 +22,7 @@ import { logger, onLog, recentLogs, type LogEntry } from './log.js'
 import type { Settings } from './settings.js'
 import { AppError } from './util.js'
 
-export const REPORT_REPO = process.env.WA_FEEDBACK_REPO || 'emrgim/mcp-mrg-whatsops'
+export const REPORT_REPO = process.env.WA_FEEDBACK_REPO || 'emrgim/WhatsOps'
 const CRASH_DIR = path.join(config.dataDir, 'crash')
 
 export type FeedbackKind = 'bug' | 'idea' | 'other'

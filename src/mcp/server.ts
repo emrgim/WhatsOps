@@ -136,7 +136,7 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   tool(
     'whatsops_feedback',
     'Send feedback about WhatsOps',
-    'Send feedback about WhatsOps itself (a bug, an idea, anything else) to its developers. It opens a PUBLIC issue in the GitHub repository emrgim/mcp-mrg-whatsops, signed only with this installation code: never put phone numbers, names, message contents or keys in it. Show the text to the user and get their OK before sending.',
+    'Send feedback about WhatsOps itself (a bug, an idea, anything else) to its developers. It opens a PUBLIC issue in the GitHub repository emrgim/WhatsOps, signed only with this installation code: never put phone numbers, names, message contents or keys in it. Show the text to the user and get their OK before sending.',
     'read',
     {
       kind: z.enum(['bug', 'idea', 'other']).describe(L('bug = something does not work, idea = a request or an improvement, other = anything else')),

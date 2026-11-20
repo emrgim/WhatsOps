@@ -762,12 +762,12 @@ $('#logClear').addEventListener('click', () => { logEntries = []; termRender() }
 let updTimer = null
 function renderUpdates(u) {
   $('#updCur').textContent = u.current
-  $('#updLatest').textContent = u.latest ? u.latest.version : t('upd.none')
+  $('#updLatest').textContent = u.latest ? u.latest.version : u.lastError ? t('upd.unknown') : t('upd.none')
   $('#updAuto').checked = !!u.auto
   $('#updAuto').disabled = u.mode !== 'git'
-  let st = u.busy ? t('upd.installing') : u.restartNeeded ? t('upd.restartNeeded') : u.available ? t('upd.available', u.latest.version) : t('upd.uptodate')
-  if (u.lastResult) st += ' · ' + t('upd.last', `${fmtDate(u.lastResult.at)} — ${u.lastResult.message}`)
-  if (u.lastError) st += ' · ' + t('upd.error', u.lastError)
+  let st = u.busy ? t('upd.installing') : u.restartNeeded ? t('upd.restartNeeded') : u.available ? t('upd.available', u.latest.version) : u.lastError ? '' : t('upd.uptodate')
+  if (u.lastResult) st += (st ? ' · ' : '') + t('upd.last', `${fmtDate(u.lastResult.at)} — ${u.lastResult.message}`)
+  if (u.lastError) st += (st ? ' · ' : '') + t('upd.error', u.lastError)
   $('#updState').textContent = st
   $('#updHint').textContent = u.mode === 'git' ? t('upd.hintGit', u.intervalMin, u.lastCheck ? fmtDate(u.lastCheck) : '—') : t('upd.hintManual')
   $('#updApply').hidden = !(u.available && u.mode === 'git' && !u.busy)

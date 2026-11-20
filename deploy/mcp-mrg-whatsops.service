@@ -8,7 +8,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=%h/mcp-mrg-whatsops
+WorkingDirectory=%h/WhatsOps
 Environment=NODE_ENV=production
 # Environment=WA_PUBLIC_URL=https://whatsops.example.com
 EnvironmentFile=-%h/.config/mcp-mrg-whatsops.env

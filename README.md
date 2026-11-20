@@ -36,8 +36,8 @@ English and Italian: the config page follows the browser language, the server (M
 Requirements: **Node.js 24+** and git.
 
 ```bash
-git clone https://github.com/emrgim/mcp-mrg-whatsops.git
-cd mcp-mrg-whatsops
+git clone https://github.com/emrgim/WhatsOps.git
+cd WhatsOps
 npm ci
 npm run build
 npm start                      # listens on http://127.0.0.1:8810

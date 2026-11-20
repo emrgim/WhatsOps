@@ -18,7 +18,7 @@ import { logger } from './log.js'
 import type { Settings } from './settings.js'
 import { AppError } from './util.js'
 
-export const UPDATE_REPO = process.env.WA_UPDATE_REPO || process.env.WA_FEEDBACK_REPO || 'emrgim/mcp-mrg-whatsops'
+export const UPDATE_REPO = process.env.WA_UPDATE_REPO || process.env.WA_FEEDBACK_REPO || 'emrgim/WhatsOps'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const INTERVAL_MIN = Math.max(1, Number(process.env.WA_UPDATE_INTERVAL_MIN || 5))
 const HEALTHY_AFTER_MS = 120_000
@@ -53,11 +53,11 @@ function sh(cmd: string, args: string[], timeout = 120_000): Promise<string> {
 export class Updater {
   latest: Release | null = null
   lastCheck = 0
+  private repo = UPDATE_REPO // current name on GitHub (follows renames)
   lastError: string | null = null
   lastResult: Result | null = null
   busy: 'checking' | 'installing' | 'rollback' | null = null
   restartNeeded = false
-  private etag = ''
   private skipped = '' // version skipped because of local changes (warn once)
 
   constructor(
@@ -155,23 +155,54 @@ export class Updater {
 
   async check(): Promise<Release | null> {
     if (this.busy === 'installing' || this.busy === 'rollback') return this.latest
-    const r = await fetch(`https://api.github.com/repos/${UPDATE_REPO}/releases/latest`, {
-      headers: { accept: 'application/vnd.github+json', 'user-agent': `WhatsOps/${VERSION}`, ...(this.etag ? { 'if-none-match': this.etag } : {}) },
-      signal: AbortSignal.timeout(15_000),
-    })
+    // Not the REST API: without a login it allows 60 calls per hour per IP address, shared by every
+    // program on the same network. github.com/<repo>/releases/latest redirects to the latest
+    // published release (no drafts, no pre-releases) and is not counted against that limit.
+    // A renamed repository answers 301 to its new name first: follow that, stop at the tag.
+    let url = `https://github.com/${UPDATE_REPO}/releases/latest`
+    let r!: Response
+    let m: RegExpMatchArray | null = null
+    for (let hop = 0; hop < 4; hop++) {
+      r = await fetch(url, { redirect: 'manual', headers: { 'user-agent': `WhatsOps/${VERSION}` }, signal: AbortSignal.timeout(15_000) })
+      await r.body?.cancel().catch(() => undefined)
+      const loc = r.headers.get('location') ?? ''
+      m = loc.match(/\/([^/]+\/[^/]+)\/releases\/tag\/([^/?#]+)/)
+      if (m || r.status < 300 || r.status >= 400 || !/\/releases\/latest$/.test(new URL(loc, url).pathname)) break
+      url = new URL(loc, url).toString()
+    }
     this.lastCheck = Date.now()
-    if (r.status === 304) return this.latest
-    if (r.status === 404) {
-      this.latest = null
+    if (m) this.repo = m[1]
+    if (r.status === 404 || (r.status >= 300 && r.status < 400 && !m)) {
+      this.latest = null // repository without releases
       this.lastError = null
       return null
     }
-    if (!r.ok) throw new Error(`GitHub ${r.status}`)
-    this.etag = r.headers.get('etag') ?? ''
-    const j = (await r.json()) as { tag_name: string; html_url: string; body?: string; published_at: string }
-    this.latest = { version: j.tag_name.replace(/^v/, ''), tag: j.tag_name, url: j.html_url, notes: (j.body ?? '').slice(0, 4000), published: j.published_at }
+    if (!m) throw new Error(`GitHub ${r.status}`)
+    const tag = decodeURIComponent(m[2])
+    if (this.latest?.tag !== tag) {
+      this.latest = { version: tag.replace(/^v/, ''), tag, url: `https://github.com/${this.repo}/releases/tag/${encodeURIComponent(tag)}`, notes: '', published: '' }
+      await this.readNotes(this.latest).catch(() => undefined)
+    }
     this.lastError = null
     return this.latest
+  }
+
+  /** Release notes and date from the releases Atom feed (also outside the REST API limit). */
+  private async readNotes(rel: Release): Promise<void> {
+    const r = await fetch(`https://github.com/${this.repo}/releases.atom`, { headers: { 'user-agent': `WhatsOps/${VERSION}` }, signal: AbortSignal.timeout(15_000) })
+    if (!r.ok) return
+    const xml = await r.text()
+    for (const entry of xml.split('<entry>').slice(1)) {
+      if (!entry.includes(`/releases/tag/${encodeURIComponent(rel.tag)}"`) && !entry.includes(`/releases/tag/${rel.tag}"`)) continue
+      const unxml = (s: string) => s.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&amp;/g, '&')
+      const html = unxml(entry.match(/<content[^>]*>([\s\S]*?)<\/content>/)?.[1] ?? '')
+      rel.notes = unxml(html.replace(/<br\s*\/?>/gi, '\n').replace(/<\/(p|li|h\d)>/gi, '\n').replace(/<li>/gi, '• ').replace(/<[^>]+>/g, ''))
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+        .slice(0, 4000)
+      rel.published = entry.match(/<updated>([^<]+)<\/updated>/)?.[1] ?? ''
+      return
+    }
   }
 
   private async tick(): Promise<void> {
