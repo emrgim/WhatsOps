@@ -114,7 +114,9 @@ async function waitHealth(want, secs = 120, port = 8810) {
   }
   throw new Error(want ? `WhatsOps ${VER} is not answering on ${port}` : `WhatsOps still answers on ${port}`)
 }
-const readPid = (dataDir) => Number(fs.readFileSync(path.join(dataDir, 'service.lock'), 'utf8').trim() || 0)
+function readPid(dataDir) {
+  return Number(fs.readFileSync(path.join(dataDir, 'service.lock'), 'utf8').trim() || 0)
+}
 /** Kill WhatsOps: the system service must start it again by itself. */
 async function killAndCheckRestart(dataDir, kill) {
   const pid = readPid(dataDir)
@@ -133,9 +135,10 @@ async function killAndCheckRestart(dataDir, kill) {
   }
   throw new Error('WhatsOps did not start again by itself')
 }
-const checkLink = (out) => {
+function checkLink(out) {
   const url = out.toString().trim().split(/\s+/).pop()
   if (!/^http:\/\/127\.0\.0\.1:8810\/login\?t=/.test(url)) throw new Error(`no sign-in link: ${out}`)
+  log(`install test: sign-in link ok`)
 }
 
 async function smoke() {

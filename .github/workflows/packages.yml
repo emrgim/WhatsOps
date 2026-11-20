@@ -8,8 +8,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag (e.g. v1.4.0)
-        required: true
+        description: Release tag to attach the installers to (empty = test run on this branch, nothing attached)
+        required: false
+        default: ''
 
 permissions:
   contents: write
@@ -33,7 +34,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ env.TAG }}
+          ref: ${{ env.TAG || github.ref }}
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -48,5 +49,6 @@ jobs:
         env:
           WHATSOPS_INSTALL_TEST: '1'
       - name: Attach to the release
+        if: env.TAG != ''
         shell: bash
         run: gh release upload "$TAG" out/upload/* --clobber --repo "$GITHUB_REPOSITORY"
