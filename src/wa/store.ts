@@ -94,7 +94,112 @@ export class WaStore {
     }
   }
 
-  async addLidMappings(pairs: { lid: string; pn: string }[]): Promise<void> {
+  /**
+   * Seed the LID map from the session's own `lid-mapping` keys. A session imported from another
+   * program carries thousands of them while `lid_map` starts empty, so receipts and messages keyed
+   * by LID would not find their phone-number chat.
+   */
+  async seedLidMapFromAuth(): Promise<number> {
+    const rows = await this.h.db.selectFrom('auth_keys').select(['id', 'data']).where('account_id', '=', this.accountId).where('type', '=', 'lid-mapping').execute()
+    const pairs: { lid: string; pn: string }[] = []
+    for (const r of rows) {
+      if (!r.id.endsWith('_reverse') || !r.data) continue
+      let pnUser: unknown
+      try {
+        pnUser = JSON.parse(r.data)
+      } catch {
+        continue
+      }
+      if (typeof pnUser !== 'string' || !/^\d+$/.test(pnUser)) continue
+      pairs.push({ lid: `${r.id.slice(0, -'_reverse'.length)}@lid`, pn: `${pnUser}@s.whatsapp.net` })
+    }
+    return (await this.addLidMappings(pairs)).length
+  }
+
+  /**
+   * Move chats, messages and contacts stored under a LID to the phone-number JID once the mapping
+   * is known, so one person is one chat and later receipts (keyed by LID) update the right rows.
+   */
+  async mergeLidAliases(only?: string[]): Promise<{ chats: number; messages: number; contacts: number }> {
+    const acc = this.accountId
+    const out = { chats: 0, messages: 0, contacts: 0 }
+    const db = this.h.db
+    const want = only?.map((l) => bareJid(l)).filter((l) => isLidJid(l))
+    if (want && !want.length) return out
+    // whole-table scan at startup, targeted lookups when new mappings arrive
+    const scan = async (table: 'chats' | 'messages' | 'contacts', col: 'jid' | 'chat_jid' | 'sender'): Promise<Set<string>> => {
+      const found = new Set<string>()
+      const parts = want ? Array.from({ length: Math.ceil(want.length / 500) }, (_, i) => want.slice(i * 500, i * 500 + 500)) : [null]
+      for (const part of parts) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let q = (db as any).selectFrom(table).select(col).distinct().where('account_id', '=', acc)
+        q = part ? q.where(col, 'in', part) : q.where(col, 'like', '%@lid')
+        for (const r of (await q.execute()) as Record<string, string | null>[]) if (r[col]) found.add(r[col] as string)
+      }
+      return found
+    }
+    const lidChats = await scan('chats', 'jid')
+    const lidMsgChats = await scan('messages', 'chat_jid')
+    const lidSenders = await scan('messages', 'sender')
+    const lidContacts = await scan('contacts', 'jid')
+    const candidates = want ?? [...new Set([...lidChats, ...lidMsgChats, ...lidSenders, ...lidContacts])]
+    for (const lid of candidates) {
+      const pn = this.lidCache.get(lid)
+      if (!pn || !(lidChats.has(lid) || lidMsgChats.has(lid) || lidSenders.has(lid) || lidContacts.has(lid))) continue
+      await db.transaction().execute(async (tx) => {
+        if (lidMsgChats.has(lid)) {
+          const lidIds = (await tx.selectFrom('messages').select('id').where('account_id', '=', acc).where('chat_jid', '=', lid).execute()).map((r) => r.id)
+          const dup = new Set<string>()
+          for (let i = 0; i < lidIds.length; i += 500) {
+            const part = lidIds.slice(i, i + 500)
+            for (const r of await tx.selectFrom('messages').select('id').where('account_id', '=', acc).where('chat_jid', '=', pn).where('id', 'in', part).execute()) dup.add(r.id)
+          }
+          const dupIds = [...dup]
+          for (let i = 0; i < dupIds.length; i += 500) {
+            await tx.deleteFrom('messages').where('account_id', '=', acc).where('chat_jid', '=', lid).where('id', 'in', dupIds.slice(i, i + 500)).execute()
+          }
+          const moved = await tx.updateTable('messages').set({ chat_jid: pn }).where('account_id', '=', acc).where('chat_jid', '=', lid).executeTakeFirst()
+          out.messages += Number(moved.numUpdatedRows)
+        }
+        if (lidSenders.has(lid)) await tx.updateTable('messages').set({ sender: pn }).where('account_id', '=', acc).where('sender', '=', lid).execute()
+        if (lidChats.has(lid)) {
+          const l = await tx.selectFrom('chats').selectAll().where('account_id', '=', acc).where('jid', '=', lid).executeTakeFirst()
+          const p = await tx.selectFrom('chats').selectAll().where('account_id', '=', acc).where('jid', '=', pn).executeTakeFirst()
+          if (l && p) {
+            await tx
+              .updateTable('chats')
+              .set({ name: p.name ?? l.name, last_ts: Math.max(Number(p.last_ts) || 0, Number(l.last_ts) || 0) || null })
+              .where('account_id', '=', acc)
+              .where('jid', '=', pn)
+              .execute()
+            await tx.deleteFrom('chats').where('account_id', '=', acc).where('jid', '=', lid).execute()
+          } else if (l) {
+            await tx.updateTable('chats').set({ jid: pn }).where('account_id', '=', acc).where('jid', '=', lid).execute()
+          }
+          out.chats++
+        }
+        if (lidContacts.has(lid)) {
+          const l = await tx.selectFrom('contacts').selectAll().where('account_id', '=', acc).where('jid', '=', lid).executeTakeFirst()
+          const p = await tx.selectFrom('contacts').selectAll().where('account_id', '=', acc).where('jid', '=', pn).executeTakeFirst()
+          if (l && p) {
+            await tx
+              .updateTable('contacts')
+              .set({ lid, name: p.name ?? l.name, notify: p.notify ?? l.notify, verified_name: p.verified_name ?? l.verified_name })
+              .where('account_id', '=', acc)
+              .where('jid', '=', pn)
+              .execute()
+            await tx.deleteFrom('contacts').where('account_id', '=', acc).where('jid', '=', lid).execute()
+          } else if (l) {
+            await tx.updateTable('contacts').set({ jid: pn, pn, lid }).where('account_id', '=', acc).where('jid', '=', lid).execute()
+          }
+          out.contacts++
+        }
+      })
+    }
+    return out
+  }
+
+  async addLidMappings(pairs: { lid: string; pn: string }[]): Promise<string[]> {
     const rows: Record<string, unknown>[] = []
     for (const p of pairs) {
       const lid = bareJid(p.lid)
@@ -109,6 +214,7 @@ export class WaStore {
       // a PN might have been mapped to another LID before: keep one row per lid
       await upsertMany(this.h, 'lid_map', rows, ['account_id', 'lid'], ['pn'])
     }
+    return rows.map((r) => r.lid as string)
   }
 
   pnForLid(lid: string): string | undefined {
@@ -373,7 +479,10 @@ export class WaStore {
         data: JSON.stringify({ username: c.username, status: c.status }),
       })
     }
-    if (maps.length) await this.addLidMappings(maps)
+    if (maps.length) {
+      const added = await this.addLidMappings(maps)
+      if (added.length) await this.mergeLidAliases(added)
+    }
     // merge so a partial update does not wipe a saved name
     const dedup = new Map<string, Record<string, unknown>>()
     for (const r of rows) dedup.set(r.jid as string, { ...(dedup.get(r.jid as string) ?? {}), ...Object.fromEntries(Object.entries(r).filter(([, v]) => v !== null)) })

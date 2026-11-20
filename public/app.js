@@ -44,7 +44,7 @@ const num = (n) => Number(n ?? 0).toLocaleString(LOCALE)
 
 // ---------------------------------------------------------------- tabs
 // top tabs: numbers · connectors (mcp / api / hooks) · settings (general / db)
-const SUBS = { connect: ['mcp', 'api', 'hooks'], settings: ['general', 'db'] }
+const SUBS = { connect: ['mcp', 'api', 'hooks'], settings: ['general', 'db', 'log'] }
 const LEGACY = { keys: 'connect/api', hooks: 'connect/hooks', db: 'settings/db' }
 const lastSub = { connect: 'mcp', settings: 'general' }
 $$('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)))
@@ -61,6 +61,7 @@ function showTab(tab, sub) {
   }
   window.scrollTo(0, 0)
   const route = sub ? tab + '/' + sub : tab
+  if (route !== 'settings/log') stopLogLive()
   history.replaceState(null, '', '#' + route)
   loaders[route]?.()
 }
@@ -394,6 +395,63 @@ function renderVocab() {
 }
 $('#apiFilter').addEventListener('input', () => vocab && renderVocab())
 
+// ---------------------------------------------------------------- service log
+const LEVEL_NAME = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL' }
+const LEVEL_MIN = { all: 0, info: 30, warn: 40, error: 50 }
+let logES = null
+let logShown = 0
+function logTime(t) {
+  const d = new Date(t)
+  const today = d.toDateString() === new Date().toDateString()
+  return today ? d.toLocaleTimeString(LOCALE, { hour12: false }) : d.toLocaleString(LOCALE, { dateStyle: 'short', timeStyle: 'medium', hour12: false })
+}
+function logSummary(data) {
+  if (!data) return ''
+  return Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'string' ? v.split('\n')[0] : JSON.stringify(v)}`).join(' ').slice(0, 220)
+}
+function logRow(e) {
+  const lvl = LEVEL_NAME[e.level] ?? e.level
+  const head = `<span class="lt">${esc(logTime(e.t))}</span><span class="ll">${esc(lvl)}</span><span class="lm">${esc(e.mod ?? '')}</span><span class="lx">${esc(e.msg)}${e.data ? ` <span class="ld">${esc(logSummary(e.data))}</span>` : ''}</span>`
+  const cls = `lg lvl-${Math.min(60, Math.floor(e.level / 10) * 10)}`
+  return e.data ? `<details class="${cls}"><summary>${head}</summary><pre>${esc(JSON.stringify(e.data, null, 2))}</pre></details>` : `<div class="${cls}"><div class="row">${head}</div></div>`
+}
+function logMatches(e) {
+  if (e.level < LEVEL_MIN[$('#logLevel').value]) return false
+  const q = $('#logQ').value.trim().toLowerCase()
+  return !q || `${e.mod ?? ''} ${e.msg} ${e.data ? JSON.stringify(e.data) : ''}`.toLowerCase().includes(q)
+}
+function logCount() { $('#logCount').textContent = logShown ? t('log.count', num(logShown)) : t('log.empty') }
+async function loadLogs() {
+  const qs = new URLSearchParams({ level: $('#logLevel').value, limit: '1000' })
+  const q = $('#logQ').value.trim()
+  if (q) qs.set('q', q)
+  const r = await api('GET', '/v1/admin/logs?' + qs)
+  const rows = r.entries.slice().reverse()
+  logShown = rows.length
+  $('#logList').innerHTML = rows.map(logRow).join('')
+  logCount()
+  if ($('#logLive').checked) startLogLive(); else stopLogLive()
+}
+function startLogLive() {
+  if (logES) return
+  logES = new EventSource('/v1/admin/logs/stream')
+  logES.onmessage = (m) => {
+    let e
+    try { e = JSON.parse(m.data) } catch { return }
+    if (!logMatches(e)) return
+    $('#logList').insertAdjacentHTML('afterbegin', logRow(e))
+    logShown++
+    const list = $('#logList')
+    while (list.children.length > 1000) list.lastElementChild.remove()
+    logCount()
+  }
+}
+function stopLogLive() { if (logES) { logES.close(); logES = null } }
+let logQTimer = null
+$('#logLevel').addEventListener('change', run(loadLogs))
+$('#logQ').addEventListener('input', () => { clearTimeout(logQTimer); logQTimer = setTimeout(run(loadLogs), 300) })
+$('#logLive').addEventListener('change', (e) => (e.target.checked ? startLogLive() : stopLogLive()))
+
 // ---------------------------------------------------------------- settings
 async function loadSettings() {
   const s = await api('GET', '/v1/admin/settings')
@@ -434,7 +492,7 @@ $('#mkLink').addEventListener('click', run(async () => { const r = await api('PO
 $('#restart').addEventListener('click', run(async () => { if (!confirm(t('confirm.restart'))) return; await api('POST', '/v1/admin/restart'); toast(t('svc.restarting')); setTimeout(() => location.reload(), 5000) }))
 
 // ---------------------------------------------------------------- boot
-const loaders = { numbers: loadOverview, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/db': loadDb }
+const loaders = { numbers: loadOverview, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/db': loadDb, 'settings/log': loadLogs }
 ;(async () => {
   try { await loadOverview() } catch (e) { toast(e.message, true) }
   startEvents()

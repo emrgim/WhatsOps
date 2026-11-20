@@ -140,6 +140,22 @@ async function main() {
     restart: (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref(),
   }
 
+  // activity log (Settings → Log): every change through the API / MCP tool call, never bodies
+  fastify.addHook('onResponse', async (req, reply) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return
+    const url = req.routeOptions?.url ?? req.url.split('?')[0]
+    const ms = Math.round(reply.elapsedTime)
+    if (url === '/mcp') {
+      const body = req.body as { method?: string; params?: { name?: string } } | { method?: string; params?: { name?: string } }[] | undefined
+      const tools = (Array.isArray(body) ? body : [body]).filter((b) => b?.method === 'tools/call').map((b) => b?.params?.name ?? '?')
+      if (tools.length) logger.info({ mod: 'mcp', tools, status: reply.statusCode, ms }, `tool ${tools.join(', ')}`)
+      return
+    }
+    if (!/^\/(v1|auth|oauth)\//.test(url)) return
+    const level = reply.statusCode >= 500 ? 'error' : reply.statusCode >= 400 ? 'warn' : 'info'
+    logger[level]({ mod: 'api', status: reply.statusCode, ms }, `${req.method} ${url}`)
+  })
+
   // never let a proxy/CDN (Cloudflare) cache an error page
   fastify.addHook('onSend', async (_req, reply, payload) => {
     if (reply.statusCode >= 400) reply.header('cache-control', 'no-store')

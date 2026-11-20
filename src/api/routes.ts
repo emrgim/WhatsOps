@@ -7,7 +7,7 @@ import { z } from 'zod'
 import { VERSION, config, readBootstrap, writeBootstrap } from '../config.js'
 import { copyAll, maskDbUrl, migrate, now, openDb, parseDbUrl, pingDb } from '../db/index.js'
 import { WEBHOOK_EVENTS, type WaEvent } from '../events.js'
-import { logger } from '../log.js'
+import { LOG_FILE, logger, onLog, recentLogs } from '../log.js'
 import { accountFor, authenticate, requireScope, visibleAccounts, type App } from '../app.js'
 import { SESSION_COOKIE, publicOrigin, randomToken, requestIp, type Principal } from '../security/auth.js'
 import { DEFAULT_SETTINGS } from '../settings.js'
@@ -434,6 +434,33 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   )
 
   // ------------------------------------------------------------------ admin
+  // ---- service log (Settings → Log)
+  const LEVELS: Record<string, number> = { all: 0, debug: 20, info: 30, warn: 40, error: 50 }
+  f.get(
+    '/v1/admin/logs',
+    { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Recent service log', querystring: z.object({ level: z.enum(['all', 'debug', 'info', 'warn', 'error']).optional(), q: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(3000).optional() }) } },
+    async (req) => ({ entries: recentLogs({ minLevel: LEVELS[req.query.level ?? 'all'], q: req.query.q, limit: req.query.limit ?? 500 }) }),
+  )
+  f.get('/v1/admin/logs/stream', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Live service log (Server-Sent Events)' } }, async (req, reply) => {
+    reply.hijack()
+    reply.raw.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive', 'x-accel-buffering': 'no' })
+    reply.raw.write(`: connected ${new Date().toISOString()}\n\n`)
+    const off = onLog((e) => reply.raw.write(`data: ${JSON.stringify(e)}\n\n`))
+    const hb = setInterval(() => reply.raw.write(`: ping\n\n`), 25_000)
+    req.raw.on('close', () => {
+      clearInterval(hb)
+      off()
+    })
+  })
+  f.get('/v1/admin/logs/download', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Download the service log file (JSON lines)' } }, async (_req, reply) => {
+    const body = fs.existsSync(LOG_FILE) ? fs.readFileSync(LOG_FILE) : Buffer.from('')
+    return reply
+      .type('application/x-ndjson; charset=utf-8')
+      .header('content-disposition', `attachment; filename="whatsops-${new Date().toISOString().slice(0, 10)}.log"`)
+      .header('cache-control', 'no-store')
+      .send(body)
+  })
+
   f.get('/v1/admin/overview', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Server overview' } }, async (req) => {
     const accounts = []
     for (const a of app.accounts.list()) accounts.push({ ...a.status(), stats: await app.svc.stats(a).catch(() => null) })

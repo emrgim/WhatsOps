@@ -191,6 +191,9 @@ export class WaAccount {
     this.stopping = false
     this.retry = 0
     await this.store.loadLidMap()
+    const seeded = await this.store.seedLidMapFromAuth()
+    const merged = await this.store.mergeLidAliases()
+    if (seeded || merged.chats || merged.messages || merged.contacts) logger.info({ account: this.id, seeded, merged }, 'LID map seeded / LID chats merged')
     if (pairing) {
       if (pairing.method === 'code') {
         const ph = digits(pairing.phone ?? this.row.phone ?? '')
@@ -249,11 +252,17 @@ export class WaAccount {
 
         if (events['connection.update']) await this.onConnection(events['connection.update'], sock, gen)
 
-        if (events['lid-mapping.update']) await this.store.addLidMappings([events['lid-mapping.update']])
+        if (events['lid-mapping.update']) {
+          const added = await this.store.addLidMappings([events['lid-mapping.update']])
+          if (added.length) await this.store.mergeLidAliases(added)
+        }
 
         if (events['messaging-history.set']) {
           const { chats, contacts, messages, lidPnMappings, progress, syncType } = events['messaging-history.set']
-          if (lidPnMappings?.length) await this.store.addLidMappings(lidPnMappings)
+          if (lidPnMappings?.length) {
+            const added = await this.store.addLidMappings(lidPnMappings)
+            if (added.length) await this.store.mergeLidAliases(added)
+          }
           if (contacts?.length) await this.store.upsertContacts(contacts)
           if (chats?.length) await this.store.upsertChats(chats)
           const rows = messages?.length ? await this.store.upsertMessages(messages) : []

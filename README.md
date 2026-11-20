@@ -8,7 +8,7 @@ One process holds one linked-device connection per number and exposes it three w
 
 - **MCP** (`/mcp`, Streamable HTTP) for AI agents: Claude, ChatGPT, Grok, Gemini, Cursor, Hermes… with OAuth 2.1 or API keys, plus a stdio proxy for stdio-only clients.
 - **REST API** (`/v1`) with OpenAPI docs at `/docs`, Server-Sent Events and signed webhooks.
-- **Config page** (`/`) to link numbers (QR code or phone-number pairing code), create API keys, connect MCP clients, manage webhooks, choose the database and the appearance (Light / Dark / System).
+- **Config page** (`/`) to link numbers (QR code or phone-number pairing code), create API keys, connect MCP clients, manage webhooks, choose the database and the appearance (Light / Dark / System), and read the service log.
 
 English and Italian: the config page follows the browser language, the server (MCP tool texts, errors) follows the operating system language.
 
@@ -20,6 +20,7 @@ English and Italian: the config page follows the browser language, the server (M
 - Send text, media (URL or base64), location, reactions; edit / delete own messages; mark as read. Idempotency keys, per-number rate limit, per-chat pause, optional recipient allow-list.
 - OAuth 2.1 (PKCE, dynamic client registration, static client ids) with 24 h access tokens and 90-day sliding refresh tokens; scoped API keys (`read`, `send`, `admin`) limited to chosen numbers.
 - Admin sign-in with a one-time code sent to the number's own "Message yourself" chat, a one-time login link, or a password.
+- Service log in **Settings → Log**: live, searchable, filterable by level, downloadable; every API change and MCP tool call is listed (never message bodies). Also kept as a rotating file in `<data>/logs/`.
 
 ## MCP tools
 

@@ -90,3 +90,17 @@ dialog::backdrop{background:color-mix(in srgb,var(--card2) 75%,transparent)}
 .seg input:checked+span{background:var(--accent);color:var(--accent-fg);font-weight:700}
 .seg input:focus-visible+span{outline:1px solid var(--accent);outline-offset:-3px}
 #appearInfo b{color:var(--accent)}
+/* service log (Settings → Log) */
+.logbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.logbar select{width:auto;margin:0}.logbar #logQ{flex:1;min-width:180px;margin:0}.logbar label.inline{margin:0}
+.logbar .dl{border:1px solid var(--border);color:var(--fg);padding:6px 12px;text-decoration:none}.logbar .dl:hover{border-color:var(--accent);color:var(--accent)}
+.loglist{border:1px solid var(--border);background:var(--card2);font-size:12px;line-height:1.45}
+.lg{border-bottom:1px solid var(--border)}.lg:last-child{border-bottom:0}
+.lg>summary,.lg>.row{display:grid;grid-template-columns:150px 52px 80px 1fr;gap:10px;padding:4px 10px;list-style:none}
+.lg>summary{cursor:pointer}.lg>summary::-webkit-details-marker{display:none}.lg>summary:hover,.lg>.row:hover{background:var(--sel)}
+.lg[open]>summary{background:var(--sel)}
+.lg .lt{color:var(--muted);white-space:nowrap}.lg .ll{font-weight:700}.lg .lm{color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lg .lx{word-break:break-word}.lg .ld{color:var(--muted)}
+.lvl-50 .ll,.lvl-60 .ll{color:var(--danger)}.lvl-40 .ll{color:var(--warn)}.lvl-30 .ll{color:var(--accent)}.lvl-20 .ll,.lvl-10 .ll{color:var(--muted)}
+.lg pre{margin:0;border:0;border-top:1px solid var(--border);background:var(--bg);max-height:340px}
+@media (max-width:640px){.lg>summary,.lg>.row{grid-template-columns:auto auto 1fr}.lg .lm{display:none}}
