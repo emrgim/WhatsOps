@@ -981,9 +981,10 @@ $('#repList').addEventListener('click', run(async (e) => {
   if (!b) return
   const id = b.closest('[data-id]').dataset.id
   b.disabled = true
-  if (b.dataset.rep === 'send') { const s = await api('POST', `/v1/admin/reports/${id}/send`); toast(t('fb.sentOk', s.number)) }
-  else await api('DELETE', `/v1/admin/reports/${id}`)
-  await loadFeedback()
+  try {
+    if (b.dataset.rep === 'send') { const s = await api('POST', `/v1/admin/reports/${id}/send`); toast(t(s.already ? 'rep.already' : 'fb.sentOk', s.number)) }
+    else await api('DELETE', `/v1/admin/reports/${id}`)
+  } finally { await loadFeedback().catch(() => {}) }
 }))
 
 // ---------------------------------------------------------------- license (Polar) — hidden while WhatsOps is free

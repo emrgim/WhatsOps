@@ -28,7 +28,7 @@ const CRASH_DIR = path.join(config.dataDir, 'crash')
 export type FeedbackKind = 'bug' | 'idea' | 'other'
 export type ReportType = 'crash' | 'malfunction'
 export type PendingReport = { id: string; type: ReportType; fp: string; title: string; detail: string; version: string; at: number; last: number; count: number }
-export type SentReport = { type: 'feedback' | ReportType; kind?: FeedbackKind; title: string; number: number; url: string; at: number; via: 'web' | 'mcp' | 'auto' | 'manual'; fp?: string; comment?: boolean }
+export type SentReport = { type: 'feedback' | ReportType; kind?: FeedbackKind; title: string; number: number; url: string; at: number; via: 'web' | 'mcp' | 'auto' | 'manual'; fp?: string; comment?: boolean; id?: string; already?: boolean }
 export type Diagnostics = Record<string, string>
 
 const KIND_LABEL: Record<FeedbackKind, string> = { bug: 'bug', idea: 'enhancement', other: 'question' }
@@ -313,7 +313,24 @@ export class Reports {
   }
 
   /** Send one pending crash/malfunction report (a repeat of an open issue becomes a comment). */
+  /** One send per report even when "send automatically" and the Send button race each other. */
+  private inflight = new Map<string, Promise<SentReport>>()
+
   async sendReport(id: string, via: 'manual' | 'auto'): Promise<SentReport> {
+    const running = this.inflight.get(id)
+    if (running) return { ...(await running), already: true }
+    const done = this.sent.find((s) => s.id === id)
+    if (done) return { ...done, already: true }
+    const p = this.sendReportNow(id, via)
+    this.inflight.set(id, p)
+    try {
+      return await p
+    } finally {
+      this.inflight.delete(id)
+    }
+  }
+
+  private async sendReportNow(id: string, via: 'manual' | 'auto'): Promise<SentReport> {
     const r = this.pending.find((p) => p.id === id)
     if (!r) throw new AppError('REPORT_NOT_FOUND', 'Report not found', 404)
     const tag = `[${r.type} ${r.fp}]`
@@ -324,14 +341,14 @@ export class Reports {
     let s: SentReport
     if (same) {
       await this.github('POST', `/issues/${same.number}/comments`, { body: `Same ${r.type} on another run.\n\n${intro}${detail}${this.diagBlock(this.diagnostics())}${this.footer('report')}` })
-      s = { type: r.type, title: r.title, number: same.number, url: same.html_url, at: Date.now(), via, fp: r.fp, comment: true }
+      s = { type: r.type, title: r.title, number: same.number, url: same.html_url, at: Date.now(), via, fp: r.fp, comment: true, id }
     } else {
       const issue = await this.github<{ number: number; html_url: string }>('POST', '/issues', {
         title: `${tag} ${r.title}`.slice(0, 200),
         body: `${intro}${detail}${this.diagBlock(this.diagnostics())}${this.footer('report')}`,
         labels: [r.type],
       })
-      s = { type: r.type, title: r.title, number: issue.number, url: issue.html_url, at: Date.now(), via, fp: r.fp }
+      s = { type: r.type, title: r.title, number: issue.number, url: issue.html_url, at: Date.now(), via, fp: r.fp, id }
     }
     this.pending = this.pending.filter((p) => p.id !== id)
     this.sent.unshift(s)

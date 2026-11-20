@@ -660,7 +660,8 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     async (req) => {
       const s = await app.settings.update(req.body)
       setServerLanguage(s.language)
-      if (req.body.crashReports === 'auto') void app.reports.autoSend()
+      // switched to "send automatically": send what is pending now, so the page shows it as sent
+      if (req.body.crashReports === 'auto') await Promise.race([app.reports.autoSend().catch(() => undefined), new Promise((r) => setTimeout(r, 20_000))])
       return s
     },
   )
