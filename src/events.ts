@@ -24,7 +24,7 @@ export class EventBus extends EventEmitter {
   }
 }
 
-export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.update', 'connection.update', 'history.sync', 'chat.update'] as const
+export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.update', 'connection.update', 'history.sync', 'chat.update', 'profile.update'] as const
 
 const RETRY_DELAYS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 12 * 3600_000]
 

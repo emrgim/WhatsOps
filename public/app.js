@@ -42,14 +42,35 @@ document.addEventListener('click', (e) => {
 const fmtDate = (v) => (v ? new Date(typeof v === 'number' ? v : Date.parse(v)).toLocaleString(LOCALE, { dateStyle: 'short', timeStyle: 'short' }) : '—')
 const num = (n) => Number(n ?? 0).toLocaleString(LOCALE)
 
+// ---------------------------------------------------------------- grid / list view (per list, remembered in this browser)
+const viewOf = (id) => (localStorage.getItem('wo.view.' + id) === 'list' ? 'list' : 'grid')
+function applyView(id) {
+  const v = viewOf(id)
+  const el = document.getElementById(id)
+  if (el) { el.classList.toggle('view-list', v === 'list'); el.classList.toggle('view-grid', v === 'grid') }
+  $$(`.viewsw[data-view-for="${id}"] button`).forEach((b) => { b.classList.toggle('on', b.dataset.view === v); b.setAttribute('aria-pressed', String(b.dataset.view === v)) })
+}
+$$('.viewsw').forEach((w) => {
+  w.querySelectorAll('button').forEach((b) => { b.title = t(b.dataset.i18nTitle); b.setAttribute('aria-label', b.title) })
+  w.addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-view]')
+    if (!b) return
+    localStorage.setItem('wo.view.' + w.dataset.viewFor, b.dataset.view)
+    applyView(w.dataset.viewFor)
+  })
+  applyView(w.dataset.viewFor)
+})
+
 // ---------------------------------------------------------------- tabs
 // top tabs: numbers · connectors (mcp / api / hooks) · settings (general / db)
-const SUBS = { connect: ['mcp', 'api', 'hooks'], settings: ['general', 'db', 'log'] }
+const SUBS = { connect: ['plugins', 'mcp', 'api', 'hooks'], settings: ['general', 'updates', 'db', 'log', 'feedback', 'license'] }
 const LEGACY = { keys: 'connect/api', hooks: 'connect/hooks', db: 'settings/db' }
-const lastSub = { connect: 'mcp', settings: 'general' }
+const lastSub = { connect: 'plugins', settings: 'general' }
+let routeItem = null // third part of the route: #connect/mcp/cursor
 $$('#tabs button').forEach((b) => b.addEventListener('click', () => showTab(b.dataset.tab)))
 $$('.subnav button').forEach((b) => b.addEventListener('click', () => showTab(b.closest('.subnav').dataset.for, b.dataset.sub)))
-function showTab(tab, sub) {
+function showTab(tab, sub, item) {
+  routeItem = item || null
   if (SUBS[tab]) { sub = SUBS[tab].includes(sub) ? sub : lastSub[tab]; lastSub[tab] = sub } else sub = undefined
   $$('#tabs button').forEach((x) => x.classList.toggle('on', x.dataset.tab === tab))
   $$('.tab').forEach((x) => x.classList.toggle('on', x.id === tab))
@@ -62,7 +83,7 @@ function showTab(tab, sub) {
   window.scrollTo(0, 0)
   const route = sub ? tab + '/' + sub : tab
   if (route !== 'settings/log') stopLogLive()
-  history.replaceState(null, '', '#' + route)
+  history.replaceState(null, '', '#' + route + (routeItem ? '/' + routeItem : ''))
   loaders[route]?.()
 }
 $('#logout').addEventListener('click', run(async () => { await api('POST', '/auth/logout'); location.reload() }))
@@ -75,6 +96,7 @@ async function loadOverview() {
   state.overview = await api('GET', '/v1/admin/overview')
   state.accounts = state.overview.accounts
   $('#host').textContent = new URL(state.overview.publicUrl).host + ' · v' + state.overview.version
+  $('.subnav[data-for=settings] [data-sub=license]').hidden = !state.overview.license?.enabled
   renderAccounts()
   fillAccountSelects()
 }
@@ -90,13 +112,14 @@ function renderAccounts() {
     const st = a.stats
     const linked = !!a.me
     return `<div class="card acc" data-id="${esc(a.id)}">
-      <div class="top"><div><h4>${esc(a.label)} ${a.default ? `<span class="badge">${esc(t('acc.default'))}</span>` : ''}</h4>
-        <div class="phone">${esc(phone || '—')}</div><div class="muted small">${esc(a.me?.name ?? '')} · id <code>${esc(a.id)}</code></div></div>${badge(a.state)}</div>
+      <div class="top"><div class="who">${avatar(a)}<div><h4>${esc(a.name)} ${a.default ? `<span class="badge">${esc(t('acc.default'))}</span>` : ''}</h4>
+        <div class="phone">${esc(phone || '—')}</div>${a.about ? `<div class="muted small about">${esc(a.about)}</div>` : ''}<div class="muted small">id <code>${esc(a.id)}</code></div></div></div>${badge(a.state)}</div>
       ${st ? `<div class="stats"><span><b>${num(st.chats)}</b> ${esc(t('acc.chats'))}</span><span><b>${num(st.messages)}</b> ${esc(t('acc.messages'))}</span><span><b>${num(st.contacts)}</b> ${esc(t('acc.contacts'))}</span><span><b>${num(st.groups)}</b> ${esc(t('acc.groups'))}</span></div>` : ''}
       ${a.lastDisconnect && a.state !== 'open' ? `<div class="muted small">${esc(t('acc.lastDisconnect', a.lastDisconnect.reason + (a.lastDisconnect.code ? ' (' + a.lastDisconnect.code + ')' : '')))}</div>` : ''}
       ${a.history && a.history.progress != null && a.history.progress < 100 ? `<div class="muted small">${esc(t('acc.history', a.history.progress, num(a.history.messages)))}</div>` : ''}
       <div class="actions">
-        <button class="small" data-act="pair">${esc(t(linked ? 'acc.relink' : 'acc.link'))}</button>
+        ${linked ? `<button class="small" data-act="profile">${esc(t('acc.profile'))}</button>` : ''}
+        <button class="small${linked ? ' ghost' : ''}" data-act="pair">${esc(t(linked ? 'acc.relink' : 'acc.link'))}</button>
         ${linked && a.state !== 'open' ? `<button class="small ghost" data-act="restart">${esc(t('acc.reconnect'))}</button>` : ''}
         ${!a.default ? `<button class="small ghost" data-act="default">${esc(t('acc.makeDefault'))}</button>` : ''}
         <button class="small ghost" data-act="toggle">${esc(t(a.enabled ? 'acc.pause' : 'acc.resume'))}</button>
@@ -114,14 +137,15 @@ $('#accounts').addEventListener('click', run(async (e) => {
   const a = state.accounts.find((x) => x.id === id)
   switch (b.dataset.act) {
     case 'pair': return openPair(id)
+    case 'profile': return openProfile(id)
     case 'restart': await api('POST', `/v1/accounts/${id}/restart`); toast(t('acc.reconnecting')); break
     case 'default': await api('PATCH', `/v1/accounts/${id}`, { isDefault: true }); break
     case 'toggle': await api('PATCH', `/v1/accounts/${id}`, { enabled: !a.enabled }); break
     case 'logout':
-      if (!confirm(t('confirm.logout', a.label))) return
+      if (!confirm(t('confirm.logout', a.name))) return
       await api('POST', `/v1/accounts/${id}/logout`); break
     case 'delete':
-      if (!confirm(t('confirm.delete', a.label))) return
+      if (!confirm(t('confirm.delete', a.name))) return
       await api('DELETE', `/v1/accounts/${id}`); break
     case 'import': return openImport(id)
   }
@@ -132,16 +156,59 @@ $('#addNumber').addEventListener('click', () => { $('#addForm').reset(); $('#add
 $('#addDlg').addEventListener('close', run(async () => {
   if ($('#addDlg').returnValue !== 'ok') return
   const f = new FormData($('#addForm'))
-  const a = await api('POST', '/v1/accounts', { label: f.get('label'), phone: f.get('phone') || undefined, syncHistory: f.get('sync') === 'on' })
+  const a = await api('POST', '/v1/accounts', { phone: f.get('phone') || undefined, syncHistory: f.get('sync') === 'on' })
   await loadOverview()
   openPair(a.id, f.get('phone'))
+}))
+
+// ---------------------------------------------------------------- profile (name · info · photo, edited on WhatsApp)
+function initials(name) { return String(name || '?').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase() }
+function avatar(a, big = false) {
+  return a.photo
+    ? `<img class="avatar${big ? ' big' : ''}" alt="" src="/v1/accounts/${encodeURIComponent(a.id)}/profile/photo?t=${Date.now() >> 16}">`
+    : `<span class="avatar${big ? ' big' : ''}">${esc(initials(a.name))}</span>`
+}
+let profId = null
+function openProfile(id) {
+  const a = state.accounts.find((x) => x.id === id)
+  if (!a) return
+  if (a.state !== 'open') { toast(t('prof.offline'), true); return }
+  profId = id
+  $('#profForm').reset()
+  $('#profAvatar').outerHTML = avatar(a, true).replace('class="avatar big"', 'class="avatar big" id="profAvatar"')
+  $('#profPhone').textContent = a.me?.phone ?? ''
+  $('#profForm').name.value = a.name
+  $('#profForm').about.value = a.about ?? ''
+  $('#profRemovePhoto').hidden = !a.photo
+  $('#profDlg').showModal()
+}
+const fileToDataUrl = (f) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(f) })
+$('#profRemovePhoto').addEventListener('click', run(async () => {
+  if (!confirm(t('prof.confirmRemove'))) return
+  await api('DELETE', `/v1/accounts/${encodeURIComponent(profId)}/profile/photo`)
+  $('#profDlg').close('cancel')
+  toast(t('prof.saved'))
+  await loadOverview()
+}))
+$('#profDlg').addEventListener('close', run(async () => {
+  if ($('#profDlg').returnValue !== 'ok' || !profId) return
+  const a = state.accounts.find((x) => x.id === profId)
+  const f = $('#profForm')
+  const body = {}
+  if (f.name.value.trim() && f.name.value.trim() !== a.name) body.name = f.name.value.trim()
+  if (f.about.value.trim() !== (a.about ?? '')) body.about = f.about.value.trim()
+  if (Object.keys(body).length) await api('PATCH', `/v1/accounts/${encodeURIComponent(profId)}/profile`, body)
+  const file = f.photo.files[0]
+  if (file) await api('PUT', `/v1/accounts/${encodeURIComponent(profId)}/profile/photo`, { base64: await fileToDataUrl(file) })
+  if (Object.keys(body).length || file) toast(t('prof.saved'))
+  await loadOverview()
 }))
 
 // ---------------------------------------------------------------- pairing
 function openPair(id, phone) {
   const a = state.accounts.find((x) => x.id === id)
   pairing = { id }
-  $('#pairTitle').textContent = t('pair.title', a?.label ?? id)
+  $('#pairTitle').textContent = t('pair.title', a?.name ?? id)
   $('#pairChoose').hidden = false
   $('#pairShow').hidden = true
   $('#pairPhoneBox').hidden = true
@@ -166,7 +233,7 @@ $('#pairCodeGo').addEventListener('click', run(() => startPair('code', $('#pairP
 async function startPair(method, phone) {
   const id = pairing.id
   const cur = state.accounts.find((x) => x.id === id)
-  if (cur?.me && !confirm(t('pair.confirmRelink', cur.label, cur.me.phone))) return
+  if (cur?.me && !confirm(t('pair.confirmRelink', cur.name, cur.me.phone))) return
   if (method === 'code' && !/\d{7,}/.test((phone || '').replace(/\D/g, ''))) throw new Error(t('pair.badPhone'))
   $('#pairChoose').hidden = true
   $('#pairShow').hidden = false
@@ -216,40 +283,98 @@ function startEvents() {
   const refresh = () => { clearTimeout(timer); timer = setTimeout(() => loadOverview().catch(() => {}), 600) }
   es.addEventListener('connection.update', refresh)
   es.addEventListener('history.sync', refresh)
+  es.addEventListener('profile.update', refresh)
   es.addEventListener('pairing.qr', (e) => { const d = JSON.parse(e.data); if (pairing && d.account === pairing.id) pollPair() })
   es.addEventListener('pairing.code', (e) => { const d = JSON.parse(e.data); if (pairing && d.account === pairing.id) pollPair() })
 }
 
 // ---------------------------------------------------------------- connectors
-function clientCard(title, body) { return `<div class="card client"><h4>${title}</h4>${body}</div>` }
-async function loadConnect() {
-  $('#mcpUrl').textContent = MCP
-  const cursorCfg = btoa(JSON.stringify({ url: MCP }))
-  const cursorLink = `cursor://anysphere.cursor-deeplink/mcp/install?name=whatsops&config=${encodeURIComponent(cursorCfg)}`
-  $('#clients').innerHTML = [
-    clientCard('Cursor', `<p class="muted">${esc(t('connect.cursor.hint'))}</p><p><a href="${esc(cursorLink)}"><button type="button">${esc(t('connect.cursor.add'))}</button></a></p>
-      <pre>${esc(JSON.stringify({ mcpServers: { whatsops: { url: MCP } } }, null, 2))}</pre><p class="muted small">${t('connect.cursor.plugin')}</p>`),
-    clientCard('Claude', `<p class="muted">${t('connect.claude.hint')}</p><pre>${esc(MCP)}</pre>
-      <p class="muted">${esc(t('connect.claude.code'))}</p><pre>claude mcp add --transport http whatsops ${esc(MCP)}</pre>`),
-    clientCard('Grok (grok.com)', `<p class="muted">${esc(t('connect.grok.hint'))}</p><pre>Server URL: ${esc(MCP)}
+// connectors: square tiles (logo + name); the settings of each app open when you enter its tile
+const MCP_CLIENTS = [
+  { id: 'cursor', name: 'Cursor', logo: 'cursor.svg', mono: true, match: /cursor/i },
+  { id: 'claude', name: 'Claude', logo: 'claude.svg', match: /claude|anthropic/i },
+  { id: 'chatgpt', name: 'ChatGPT', logo: 'chatgpt.svg', mono: true, match: /chatgpt|openai/i },
+  { id: 'grok', name: 'Grok', logo: 'grok.svg', mono: true, match: /^grok$|grok\.com|^grok[^-\s]/i },
+  { id: 'grokbot', name: 'Grok Bot', logo: 'grokbot.png', match: /grok[-\s]?bot/i },
+  { id: 'hermes', name: 'Hermes', logo: 'hermes.png', match: /hermes/i },
+  { id: 'gemini', name: 'Gemini', logo: 'gemini.svg', match: /gemini/i },
+  { id: 'other', nameKey: 'connect.other.title', logo: 'mcp.svg', mono: true },
+]
+const PLUGINS = [] // installable plugins (Cursor, Claude, Hermes…) are listed here when published
+const clientName = (c) => (c.nameKey ? t(c.nameKey) : c.name)
+function logo(c, big = false) {
+  const u = `/static/logos/${c.logo}`
+  return c.mono
+    ? `<span class="logo mono${big ? ' big' : ''}" style="-webkit-mask-image:url(${u});mask-image:url(${u})" role="img" aria-label="${esc(clientName(c))}"></span>`
+    : `<img class="logo${big ? ' big' : ''}" src="${u}" alt="${esc(clientName(c))}">`
+}
+function tiles(list, sub) {
+  return list.map((c) => `<button type="button" class="tile" data-tile="${esc(c.id)}" data-sub="${sub}">${logo(c)}<span class="tile-name">${esc(clientName(c))}</span><span class="chev" aria-hidden="true">›</span></button>`).join('')
+}
+function detailHead(c, sub) {
+  return `<div class="detail-head"><button type="button" class="ghost small" data-back="${sub}">← ${esc(sub === 'mcp' ? 'MCP' : t('sub.plugins'))}</button></div>
+    <div class="detail-title">${logo(c, true)}<h2>${esc(clientName(c))}</h2></div>`
+}
+function endpointLine() {
+  return `<p class="muted"><span>${esc(t('connect.endpoint'))}</span> <code>${esc(MCP)}</code> <button class="ghost small" data-copy="${esc(MCP)}">${esc(t('copy'))}</button></p>`
+}
+function mcpSetup(id) {
+  const cursorLink = `cursor://anysphere.cursor-deeplink/mcp/install?name=whatsops&config=${encodeURIComponent(btoa(JSON.stringify({ url: MCP })))}`
+  switch (id) {
+    case 'cursor': return `<p class="muted">${esc(t('connect.cursor.hint'))}</p><p><a href="${esc(cursorLink)}"><button type="button">${esc(t('connect.cursor.add'))}</button></a></p>
+      <pre>${esc(JSON.stringify({ mcpServers: { whatsops: { url: MCP } } }, null, 2))}</pre><p class="muted small">${t('connect.cursor.plugin')}</p>`
+    case 'claude': return `<p class="muted">${t('connect.claude.hint')}</p><pre>${esc(MCP)}</pre>
+      <p class="muted">${esc(t('connect.claude.code'))}</p><pre>claude mcp add --transport http whatsops ${esc(MCP)}</pre>`
+    case 'chatgpt': return `<p class="muted">${esc(t('connect.chatgpt.hint'))}</p><pre>${esc(MCP)}</pre>`
+    case 'grok': return `<p class="muted">${esc(t('connect.grok.hint'))}</p><pre>Server URL: ${esc(MCP)}
 Client ID: grok
 Client Secret: ${esc(t('connect.empty'))}
 Authorization Endpoint: ${esc(ORIGIN)}/oauth/authorize
 Token Endpoint: ${esc(ORIGIN)}/oauth/token
 Scopes: read send
-Token Auth Method: none (PKCE)</pre>`),
-    clientCard('Grok Bot', `<p class="muted">${esc(t('connect.grokbot.hint'))}</p><div id="grokBotOut"><button type="button" class="ghost" data-mk="grokbot">${esc(t('connect.grokbot.mk'))}</button></div>`),
-    clientCard('Hermes', `<p class="muted">${esc(t('connect.hermes.hint'))}</p><div id="hermesOut"><button type="button" class="ghost" data-mk="hermes">${esc(t('connect.hermes.mk'))}</button></div>`),
-    clientCard(esc(t('connect.other.title')), `<p class="muted">${esc(t('connect.other.hint'))}</p><pre>${esc(MCP)}</pre>
-      <p class="muted">${esc(t('connect.other.stdio'))}</p><pre>WA_MCP_URL=${esc(MCP)} WA_API_KEY=wam_… mcp-mrg-whatsops stdio</pre>`),
-  ].join('')
-  const [o, s] = await Promise.all([api('GET', '/v1/admin/oauth'), api('GET', '/v1/admin/sessions')])
-  $('#grants').innerHTML = o.grants.length
-    ? `<table><tr><th>${t('th.app')}</th><th>${t('th.scopes')}</th><th>${t('th.authorized')}</th><th>${t('th.lastUsed')}</th><th></th></tr>${o.grants.map((g) => `<tr><td>${esc(g.clientName)}</td><td>${esc(g.scopes)}</td><td>${fmtDate(g.createdAt)}</td><td>${fmtDate(g.lastUsed)}</td><td><button class="small danger" data-revoke-grant="${esc(g.family)}">${esc(t('revoke'))}</button></td></tr>`).join('')}</table>`
+Token Auth Method: none (PKCE)</pre>`
+    case 'grokbot': return `<p class="muted">${esc(t('connect.grokbot.hint'))}</p><div id="grokBotOut"><button type="button" class="ghost" data-mk="grokbot">${esc(t('connect.grokbot.mk'))}</button></div>`
+    case 'hermes': return `<p class="muted">${esc(t('connect.hermes.hint'))}</p><div id="hermesOut"><button type="button" class="ghost" data-mk="hermes">${esc(t('connect.hermes.mk'))}</button></div>`
+    case 'gemini': return `<p class="muted">${esc(t('connect.gemini.hint'))}</p><pre>gemini mcp add --transport http whatsops ${esc(MCP)}</pre>
+      <pre>${esc(JSON.stringify({ mcpServers: { whatsops: { httpUrl: MCP } } }, null, 2))}</pre><p class="muted small">${esc(t('connect.gemini.auth'))}</p>`
+    default: return `<p class="muted">${esc(t('connect.other.hint'))}</p><pre>${esc(MCP)}</pre>
+      <p class="muted">${esc(t('connect.other.stdio'))}</p><pre>WA_MCP_URL=${esc(MCP)} WA_API_KEY=wam_… mcp-mrg-whatsops stdio</pre>`
+  }
+}
+const grantOf = (g) => MCP_CLIENTS.find((c) => c.match && (c.match.test(g.clientId) || c.match.test(g.clientName)))?.id ?? 'other'
+async function loadConnect() {
+  const item = routeItem
+  const c = item && MCP_CLIENTS.find((x) => x.id === item)
+  $('#mcpTiles').hidden = !!c
+  $('#mcpBar').hidden = !!c
+  $('#mcpDetail').hidden = !c
+  if (!c) { $('#mcpTiles').innerHTML = tiles(MCP_CLIENTS, 'mcp'); return }
+  $('#mcpDetail').innerHTML = `${detailHead(c, 'mcp')}<div class="card client">${endpointLine()}${mcpSetup(c.id)}</div>
+    <div class="card"><h3>${esc(t('connect.appGrants'))}</h3><div id="grants"></div></div>`
+  const o = await api('GET', '/v1/admin/oauth')
+  const mine = o.grants.filter((g) => grantOf(g) === c.id)
+  $('#grants').innerHTML = mine.length
+    ? `<table><tr><th>${t('th.app')}</th><th>${t('th.scopes')}</th><th>${t('th.authorized')}</th><th>${t('th.lastUsed')}</th><th></th></tr>${mine.map((g) => `<tr><td>${esc(g.clientName)}</td><td>${esc(g.scopes)}</td><td>${fmtDate(g.createdAt)}</td><td>${fmtDate(g.lastUsed)}</td><td><button class="small danger" data-revoke-grant="${esc(g.family)}">${esc(t('revoke'))}</button></td></tr>`).join('')}</table>`
     : `<p class="muted">${esc(t('connect.noGrants'))}</p>`
+}
+async function loadPlugins() {
+  const item = routeItem
+  const c = item && PLUGINS.find((x) => x.id === item)
+  $('#pluginTiles').hidden = !!c
+  $('#pluginBar').hidden = !!c || !PLUGINS.length
+  $('#pluginDetail').hidden = !c
+  if (c) { $('#pluginDetail').innerHTML = `${detailHead(c, 'plugins')}<div class="card">${c.body ? c.body() : ''}</div>`; return }
+  $('#pluginTiles').innerHTML = PLUGINS.length ? tiles(PLUGINS, 'plugins') : `<p class="muted">${esc(t('plugins.none'))}</p>`
+}
+async function loadSessions() {
+  const s = await api('GET', '/v1/admin/sessions')
   $('#sessions').innerHTML = `<table><tr><th>${t('th.access')}</th><th>${t('th.created')}</th><th>${t('th.lastUsed')}</th><th></th></tr>${s.map((x) => `<tr><td>${esc(x.label)}</td><td>${fmtDate(x.created_at)}</td><td>${fmtDate(x.last_seen)}</td><td><button class="small danger" data-revoke-sess="${esc(x.id_hash)}">${esc(t('revoke'))}</button></td></tr>`).join('')}</table>`
 }
-$('#connect').addEventListener('click', run(async (e) => {
+document.addEventListener('click', run(async (e) => {
+  const tile = e.target.closest('[data-tile]')
+  if (tile) return showTab('connect', tile.dataset.sub, tile.dataset.tile)
+  const back = e.target.closest('[data-back]')
+  if (back) return showTab('connect', back.dataset.back)
   const mk = e.target.closest('[data-mk]')
   if (mk) {
     const which = mk.dataset.mk
@@ -264,7 +389,7 @@ $('#connect').addEventListener('click', run(async (e) => {
   const g = e.target.closest('[data-revoke-grant]')
   if (g && confirm(t('confirm.revokeApp'))) { await api('DELETE', `/v1/admin/oauth/grants/${g.dataset.revokeGrant}`); await loadConnect() }
   const s = e.target.closest('[data-revoke-sess]')
-  if (s && confirm(t('confirm.revokeSession'))) { await api('DELETE', `/v1/admin/sessions/${s.dataset.revokeSess}`); await loadConnect() }
+  if (s && confirm(t('confirm.revokeSession'))) { await api('DELETE', `/v1/admin/sessions/${s.dataset.revokeSess}`); await loadSessions() }
 }))
 
 // ---------------------------------------------------------------- API keys
@@ -493,8 +618,79 @@ $('#logQ').addEventListener('input', () => { clearTimeout(logQTimer); logQTimer 
 $('#logLive').addEventListener('click', () => setLive(!logLive))
 $('#logClear').addEventListener('click', () => { logEntries = []; termRender() })
 
+// ---------------------------------------------------------------- updates (GitHub releases)
+let updTimer = null
+function renderUpdates(u) {
+  $('#updCur').textContent = u.current
+  $('#updLatest').textContent = u.latest ? u.latest.version : t('upd.none')
+  $('#updAuto').checked = !!u.auto
+  $('#updAuto').disabled = u.mode !== 'git'
+  let st = u.busy ? t('upd.installing') : u.restartNeeded ? t('upd.restartNeeded') : u.available ? t('upd.available', u.latest.version) : t('upd.uptodate')
+  if (u.lastResult) st += ' · ' + t('upd.last', `${fmtDate(u.lastResult.at)} — ${u.lastResult.message}`)
+  if (u.lastError) st += ' · ' + t('upd.error', u.lastError)
+  $('#updState').textContent = st
+  $('#updHint').textContent = u.mode === 'git' ? t('upd.hintGit', u.intervalMin, u.lastCheck ? fmtDate(u.lastCheck) : '—') : t('upd.hintManual')
+  $('#updApply').hidden = !(u.available && u.mode === 'git' && !u.busy)
+  $('#updNotes').hidden = !(u.latest && u.latest.notes)
+  $('#updNotesText').textContent = u.latest?.notes ?? ''
+  clearTimeout(updTimer)
+  if (u.busy) updTimer = setTimeout(() => loadUpdates().catch(() => location.reload()), 3000)
+}
+async function loadUpdates() { renderUpdates(await api('GET', '/v1/admin/update')) }
+$('#updCheck').addEventListener('click', run(async () => renderUpdates(await api('POST', '/v1/admin/update/check'))))
+$('#updApply').addEventListener('click', run(async () => { renderUpdates(await api('POST', '/v1/admin/update/apply')); toast(t('upd.done')) }))
+$('#updAuto').addEventListener('change', run(async (e) => { await api('PUT', '/v1/admin/settings', { autoUpdate: e.target.checked }); toast(t('saved')) }))
+
+// ---------------------------------------------------------------- feedback · crash & malfunction reports
+async function loadFeedback() {
+  const r = await api('GET', '/v1/admin/feedback')
+  $('#fbHint').innerHTML = esc(t('fb.hint', '')).replace('()', `(<a href="https://github.com/${esc(r.repo)}/issues" target="_blank" rel="noopener">${esc(r.repo)}</a>)`)
+  $('#fbCode').textContent = r.installCode
+  $$('input[name=crashReports]').forEach((i) => { i.checked = i.value === r.mode })
+  $('#repList').innerHTML = r.pending.length
+    ? r.pending.map((p) => `<div class="rep" data-id="${esc(p.id)}"><div class="rep-top"><span class="badge ${p.type === 'crash' ? 'bad' : 'warn'}">${esc(t('rep.' + p.type))}</span> <b>${esc(p.title)}</b> <span class="muted small">${p.count > 1 ? esc(t('rep.times', p.count)) + ' · ' : ''}${esc(fmtDate(p.last))}</span></div>
+        <details><summary>${esc(t('rep.view'))}</summary><pre>${esc(p.detail)}</pre></details>
+        <div class="row"><button type="button" class="small" data-rep="send">${esc(t('rep.send'))}</button><button type="button" class="small ghost" data-rep="discard">${esc(t('rep.discard'))}</button></div></div>`).join('')
+    : `<p class="muted">${esc(t('rep.none'))}</p>`
+  $('#fbSent').innerHTML = r.sent.length
+    ? `<ul class="sent">${r.sent.map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">#${s.number}</a> ${esc(s.type === 'feedback' ? t('fb.' + (s.kind || 'other')) : t('rep.' + s.type))} — ${esc(s.title)} <span class="muted small">${esc(fmtDate(s.at))} · ${esc(t('fb.via.' + s.via))}${s.comment ? ' · ' + esc(t('fb.comment')) : ''}</span></li>`).join('')}</ul>`
+    : `<p class="muted">${esc(t('fb.none'))}</p>`
+}
+$('#fbForm').addEventListener('submit', run(async (e) => {
+  e.preventDefault()
+  const f = e.target
+  const btn = f.querySelector('button[type=submit]')
+  btn.disabled = true
+  try {
+    const s = await api('POST', '/v1/admin/feedback', { kind: f.kind.value, title: f.title.value, message: f.message.value, diagnostics: f.diagnostics.checked })
+    f.reset()
+    toast(t('fb.sentOk', s.number))
+    await loadFeedback()
+  } finally { btn.disabled = false }
+}))
+$$('input[name=crashReports]').forEach((i) => i.addEventListener('change', run(async () => { await api('PUT', '/v1/admin/settings', { crashReports: i.value }); toast(t('saved')); await loadFeedback() })))
+$('#repList').addEventListener('click', run(async (e) => {
+  const b = e.target.closest('button[data-rep]')
+  if (!b) return
+  const id = b.closest('[data-id]').dataset.id
+  b.disabled = true
+  if (b.dataset.rep === 'send') { const s = await api('POST', `/v1/admin/reports/${id}/send`); toast(t('fb.sentOk', s.number)) }
+  else await api('DELETE', `/v1/admin/reports/${id}`)
+  await loadFeedback()
+}))
+
+// ---------------------------------------------------------------- license (Polar) — hidden while WhatsOps is free
+function renderLicense(l) {
+  $('#licState').textContent = !l.enabled ? '' : l.plan === 'licensed' ? `${t('lic.ok')} · ${l.key}${l.customer ? ' · ' + l.customer : ''}${l.expiresAt ? ' · ' + fmtDate(l.expiresAt) : ''}` : t('lic.no')
+  $('#licRemove').hidden = !(l.enabled && l.key)
+}
+async function loadLicense() { renderLicense(await api('GET', '/v1/admin/license')) }
+$('#licForm').addEventListener('submit', run(async (e) => { e.preventDefault(); renderLicense(await api('POST', '/v1/admin/license', { key: e.target.key.value })); e.target.reset(); toast(t('lic.ok')) }))
+$('#licRemove').addEventListener('click', run(async () => renderLicense(await api('DELETE', '/v1/admin/license'))))
+
 // ---------------------------------------------------------------- settings
 async function loadSettings() {
+  loadSessions().catch(() => {})
   const s = await api('GET', '/v1/admin/settings')
   const f = $('#setForm')
   for (const [k, v] of Object.entries(s)) { const el = f.elements[k]; if (!el) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v }
@@ -533,12 +729,12 @@ $('#mkLink').addEventListener('click', run(async () => { const r = await api('PO
 $('#restart').addEventListener('click', run(async () => { if (!confirm(t('confirm.restart'))) return; await api('POST', '/v1/admin/restart'); toast(t('svc.restarting')); setTimeout(() => location.reload(), 5000) }))
 
 // ---------------------------------------------------------------- boot
-const loaders = { numbers: loadOverview, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/db': loadDb, 'settings/log': loadLogs }
+const loaders = { numbers: loadOverview, 'connect/plugins': loadPlugins, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/db': loadDb, 'settings/log': loadLogs, 'settings/updates': loadUpdates, 'settings/feedback': loadFeedback, 'settings/license': loadLicense }
 ;(async () => {
   try { await loadOverview() } catch (e) { toast(e.message, true) }
   startEvents()
   let route = location.hash.slice(1)
   route = LEGACY[route] ?? route
-  const [tab, sub] = route.split('/')
-  if (tab && $('#' + tab)?.classList.contains('tab')) showTab(tab, sub)
+  const [tab, sub, item] = route.split('/')
+  if (tab && $('#' + tab)?.classList.contains('tab')) showTab(tab, sub, item)
 })()

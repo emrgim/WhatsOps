@@ -1,21 +1,40 @@
-import { now, type DbHandle } from '../db/index.js'
+import { getSetting, now, setSetting, type DbHandle } from '../db/index.js'
 import { logger } from '../log.js'
-import { AppError, slugify } from '../util.js'
+import { AppError, slugify, userOf } from '../util.js'
 import { WaAccount, type AccountRow, type Ctx } from './account.js'
 import { wipeAuth } from './auth.js'
 
-const DATA_TABLES = ['auth_keys', 'auth_creds', 'messages', 'chats', 'contacts', 'lid_map', 'wa_groups', 'outbox']
+const DATA_TABLES = ['auth_keys', 'auth_creds', 'messages', 'chats', 'contacts', 'lid_map', 'wa_groups', 'outbox', 'profiles']
+/** the id of a linked number is its phone number (digits) */
+const phoneId = (r: AccountRow): string | null => (r.me_jid ? userOf(r.me_jid).replace(/\D+/g, '') || null : null)
 
 export class AccountManager {
   readonly accounts = new Map<string, WaAccount>()
 
-  constructor(private ctx: Ctx) {}
+  /** old ids (before ids became phone numbers) → current id, so existing clients keep working */
+  private aliases: Record<string, string> = {}
+
+  constructor(private ctx: Ctx) {
+    ctx.onLinked = (acc) => {
+      if (phoneId(acc.row) && phoneId(acc.row) !== acc.id) setTimeout(() => void this.adoptPhoneId(acc.id).catch((e) => logger.error({ account: acc.id, err: String(e) }, 'could not switch the id to the phone number')), 1500)
+    }
+  }
 
   get h(): DbHandle {
     return this.ctx.h
   }
 
   async loadAll(): Promise<void> {
+    try {
+      this.aliases = JSON.parse((await getSetting(this.h, 'account_aliases')) || '{}') as Record<string, string>
+    } catch {
+      this.aliases = {}
+    }
+    // numbers linked before ids were phone numbers: rename them once (data, keys, hooks follow)
+    for (const r of (await this.h.db.selectFrom('accounts').selectAll().execute()) as AccountRow[]) {
+      const pid = phoneId(r)
+      if (pid && pid !== r.id) await this.renameInDb(r.id, pid)
+    }
     const rows = (await this.h.db.selectFrom('accounts').selectAll().orderBy('created_at').execute()) as AccountRow[]
     for (const r of rows) {
       const acc = new WaAccount(r, this.ctx)
@@ -43,7 +62,7 @@ export class AccountManager {
       return def
     }
     const k = String(idOrPhone).trim()
-    const direct = this.accounts.get(k)
+    const direct = this.accounts.get(k) ?? this.accounts.get(this.aliases[k] ?? '')
     if (direct) return direct
     const d = k.replace(/\D+/g, '')
     for (const a of this.accounts.values()) {
@@ -54,14 +73,16 @@ export class AccountManager {
   }
 
   async create(input: { id?: string; label?: string; phone?: string; syncHistory?: boolean; browser?: [string, string, string] }): Promise<WaAccount> {
-    let id = slugify(input.id || input.label || input.phone || 'account')
+    // id = phone number; without a phone (QR) a temporary id that becomes the phone number once linked
+    const ph = input.phone ? input.phone.replace(/\D+/g, '') : ''
+    let id = ph || slugify(input.id || '') || `new-${Math.random().toString(36).slice(2, 7)}`
     const base = id
     let i = 2
     while (this.accounts.has(id)) id = `${base}-${i++}`
     const isFirst = this.accounts.size === 0
     const row: AccountRow = {
       id,
-      label: input.label?.trim() || id,
+      label: input.label?.trim() || (ph ? '+' + ph : null),
       phone: input.phone ? input.phone.replace(/\D+/g, '') : null,
       // 'Mac OS' is refused at registration (428) by WhatsApp today; a custom name + 'Desktop' works and keeps full-history sync
       browser: JSON.stringify(input.browser ?? [`WhatsOps ${id}`.slice(0, 40), 'Desktop', '1.0']),
@@ -86,7 +107,11 @@ export class AccountManager {
   async update(id: string, patch: { label?: string; enabled?: boolean; syncHistory?: boolean; isDefault?: boolean; browser?: [string, string, string] }): Promise<WaAccount> {
     const acc = this.get(id)
     const set: Record<string, unknown> = { updated_at: now() }
-    if (patch.label !== undefined) set.label = patch.label.trim() || acc.id
+    if (patch.label !== undefined) {
+      // one name: on a linked number the name is the WhatsApp profile name, so change it there
+      if (acc.row.me_jid && acc.state === 'open' && patch.label.trim()) await acc.editProfile({ name: patch.label })
+      else set.label = patch.label.trim() || null
+    }
     if (patch.syncHistory !== undefined) set.sync_history = patch.syncHistory ? 1 : 0
     if (patch.browser) set.browser = JSON.stringify(patch.browser)
     if (patch.enabled !== undefined) set.enabled = patch.enabled ? 1 : 0
@@ -117,6 +142,50 @@ export class AccountManager {
       if (next) await this.update(next.id, { isDefault: true })
     }
     this.ctx.bus.publish('connection.update', acc.id, { state: 'deleted' })
+  }
+
+  /** Rename an account everywhere in the database (one transaction) and remember the old id. */
+  private async renameInDb(oldId: string, newId: string): Promise<boolean> {
+    if (oldId === newId) return false
+    const clash = await this.h.db.selectFrom('accounts').select('id').where('id', '=', newId).executeTakeFirst()
+    if (clash) {
+      logger.warn({ account: oldId, phone: newId }, 'another account already uses this phone number as id: not renamed')
+      return false
+    }
+    await this.h.db.transaction().execute(async (trx) => {
+      for (const t of DATA_TABLES) await trx.updateTable(t).set({ account_id: newId }).where('account_id', '=', oldId).execute()
+      await trx.updateTable('webhooks').set({ account_id: newId }).where('account_id', '=', oldId).execute()
+      const keys = (await trx.selectFrom('api_keys').select(['id', 'accounts']).execute()) as { id: string; accounts: string | null }[]
+      for (const k of keys) {
+        const list = (k.accounts ?? '').split(',').map((x) => x.trim())
+        if (list.includes(oldId)) await trx.updateTable('api_keys').set({ accounts: list.map((x) => (x === oldId ? newId : x)).join(',') }).where('id', '=', k.id).execute()
+      }
+      await trx.updateTable('accounts').set({ id: newId, updated_at: now() }).where('id', '=', oldId).execute()
+    })
+    for (const [k, v] of Object.entries(this.aliases)) if (v === oldId) this.aliases[k] = newId
+    this.aliases[oldId] = newId
+    await setSetting(this.h, 'account_aliases', JSON.stringify(this.aliases))
+    logger.info({ from: oldId, to: newId }, `account id is now the phone number: ${oldId} → ${newId}`)
+    return true
+  }
+
+  /** A number just linked under a temporary id: switch to its phone number (one quick reconnect). */
+  private async adoptPhoneId(id: string): Promise<void> {
+    const acc = this.accounts.get(id)
+    if (!acc) return
+    const pid = phoneId(acc.row)
+    if (!pid || pid === id) return
+    await acc.stop(false)
+    if (!(await this.renameInDb(id, pid))) {
+      await acc.start()
+      return
+    }
+    const row = (await this.h.db.selectFrom('accounts').selectAll().where('id', '=', pid).executeTakeFirst()) as AccountRow
+    this.accounts.delete(id)
+    const next = new WaAccount(row, this.ctx)
+    this.accounts.set(pid, next)
+    this.ctx.bus.publish('connection.update', pid, { state: 'connecting', renamedFrom: id })
+    await next.start()
   }
 
   async stopAll(): Promise<void> {

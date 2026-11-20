@@ -24,6 +24,10 @@ export type AppSettings = {
   language: string
   /** web pages: 'light' | 'dark' | 'system' (desktop theme if the computer has one, else the OS light/dark setting) */
   appearance: string
+  /** crash & malfunction reports to GitHub: 'ask' (keep them until the user sends) | 'auto' | 'off' (don't collect) */
+  crashReports: string
+  /** install new releases from GitHub by itself (git installations) */
+  autoUpdate: boolean
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -38,6 +42,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   maxMediaMb: 64,
   language: 'auto',
   appearance: 'system',
+  crashReports: 'ask',
+  autoUpdate: true,
 }
 
 export class Settings {
@@ -85,6 +91,7 @@ export class Settings {
       }
     }
     if (next.ratePerMin < 1) next.ratePerMin = 1
+    if (!['ask', 'auto', 'off'].includes(next.crashReports)) next.crashReports = 'ask'
     if (next.publicUrl) next.publicUrl = next.publicUrl.replace(/\/+$/, '')
     this.cur = next
     await setSetting(this.h, 'app', JSON.stringify(next))

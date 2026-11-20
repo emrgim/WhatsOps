@@ -46,7 +46,13 @@ export type AccountState =
   | 'pairing_expired'
   | 'error'
 
-export type Ctx = { h: DbHandle; bus: EventBus; settings: Settings }
+export type Ctx = { h: DbHandle; bus: EventBus; settings: Settings; onLinked?: (acc: WaAccount) => void }
+
+/** WhatsApp profile of the linked number (name = WhatsOps name, always the same). */
+export type ProfileRow = { account_id: string; about: string | null; photo: string | null; photo_type: string | null; updated_at: number | null }
+const BAD_NAMES = new Set(['', 'unknown', '~'])
+const PROFILE_EVERY = 10 * 60_000
+const PHOTO_EVERY = 60 * 60_000
 
 // ------------------------------------------------------------------ WA version
 let cachedVersion: { v: WAVersion; at: number } | null = null
@@ -142,6 +148,7 @@ export class WaAccount {
   ) {
     this.store = new WaStore(ctx.h, row.id)
     this.limiter = new SendLimiter(ctx.settings)
+    void this.loadProfile().catch(() => undefined)
   }
 
   get id(): string {
@@ -151,7 +158,11 @@ export class WaAccount {
   status() {
     return {
       id: this.row.id,
-      label: this.row.label,
+      // one name only: the WhatsApp profile name (label is kept for API compatibility)
+      name: this.displayName(),
+      label: this.displayName(),
+      about: this.profileCache?.about ?? null,
+      photo: !!this.profileCache?.photo,
       state: this.state,
       since: new Date(this.since).toISOString(),
       enabled: !!this.row.enabled,
@@ -248,7 +259,11 @@ export class WaAccount {
     sock.ev.process(async (events) => {
       if (gen !== this.generation) return
       try {
-        if (events['creds.update']) await saveCreds()
+        if (events['creds.update']) {
+          await saveCreds()
+          const n = events['creds.update'].me?.name
+          if (n) await this.onProfileName(n, 'whatsapp')
+        }
 
         if (events['connection.update']) await this.onConnection(events['connection.update'], sock, gen)
 
@@ -273,6 +288,10 @@ export class WaAccount {
         if (events['messages.upsert']) {
           const { messages, type } = events['messages.upsert']
           const rows = await this.store.upsertMessages(messages)
+          if (this.missingName()) {
+            const own = messages.find((m) => m.key.fromMe && m.pushName && !BAD_NAMES.has(m.pushName))
+            if (own?.pushName) await this.onProfileName(own.pushName, 'whatsapp')
+          }
           for (const r of rows) {
             const summary = await this.summarize(r)
             this.ctx.bus.publish(r.from_me ? 'message.sent' : 'message.received', this.row.id, { ...summary, upsertType: type })
@@ -361,6 +380,14 @@ export class WaAccount {
         if (this.row.me_lid) await this.store.addLidMappings([{ lid: this.row.me_lid, pn: me.id }])
       }
       this.setState('open', { me: { jid: bareJid(me?.id), name: me?.name } })
+      this.ctx.onLinked?.(this)
+      let n = 0
+      const refresh = () => {
+        if (gen !== this.generation || this.state !== 'open') return
+        void this.refreshProfile(n++ % (PHOTO_EVERY / PROFILE_EVERY) === 0).catch((e) => logger.debug({ account: this.row.id, err: String(e) }, 'profile refresh failed'))
+        setTimeout(refresh, PROFILE_EVERY).unref()
+      }
+      setTimeout(refresh, 6000).unref()
       setTimeout(() => {
         if (gen === this.generation && this.state === 'open') void this.refreshGroups()
       }, 8000).unref()
@@ -456,6 +483,149 @@ export class WaAccount {
     await this.stop(false)
     await wipeAuth(this.ctx.h, this.row.id)
     this.setState('logged_out', { reason: 'logged out by admin' })
+  }
+
+  // ---------------------------------------------------------------- profile (name · info · photo)
+  private profileCache: ProfileRow | null = null
+  private nameResynced = false
+
+  displayName(): string {
+    if (this.row.me_name && !BAD_NAMES.has(this.row.me_name)) return this.row.me_name
+    // linked but WhatsApp did not tell the name yet: the number, never a name of our own
+    if (this.row.me_jid) return '+' + userOf(this.row.me_jid)
+    return this.row.label || (this.row.phone ? '+' + this.row.phone : this.row.id)
+  }
+
+  private missingName(): boolean {
+    return !this.row.me_name || BAD_NAMES.has(this.row.me_name)
+  }
+
+  async loadProfile(): Promise<ProfileRow | null> {
+    this.profileCache = ((await this.ctx.h.db.selectFrom('profiles').selectAll().where('account_id', '=', this.row.id).executeTakeFirst()) as ProfileRow | undefined) ?? null
+    return this.profileCache
+  }
+
+  private async saveProfile(p: { about?: string | null; photo?: Buffer | null; photoType?: string }): Promise<void> {
+    const cur = this.profileCache ?? (await this.loadProfile()) ?? { account_id: this.row.id, about: null, photo: null, photo_type: null, updated_at: null }
+    const next: ProfileRow = { ...cur, account_id: this.row.id, updated_at: now() }
+    if (p.about !== undefined) next.about = p.about
+    if (p.photo !== undefined) {
+      next.photo = p.photo ? p.photo.toString('base64') : null
+      next.photo_type = p.photo ? p.photoType ?? 'image/jpeg' : null
+    }
+    const changed = next.about !== cur.about || next.photo !== cur.photo
+    await this.ctx.h.db.deleteFrom('profiles').where('account_id', '=', this.row.id).execute()
+    await this.ctx.h.db.insertInto('profiles').values(next).execute()
+    this.profileCache = next
+    if (changed && cur.updated_at) this.ctx.bus.publish('profile.update', this.row.id, { name: this.displayName(), about: next.about, photo: !!next.photo })
+  }
+
+  /** WhatsApp told us the profile name (phone, other device, or our own edit). */
+  async onProfileName(name: string, source: 'whatsapp' | 'whatsops'): Promise<void> {
+    name = name.trim()
+    if (BAD_NAMES.has(name) || name === this.row.me_name) return
+    const before = this.displayName()
+    this.row.me_name = name
+    this.row.label = name
+    await this.ctx.h.db.updateTable('accounts').set({ me_name: name, label: name, updated_at: now() }).where('id', '=', this.row.id).execute()
+    logger.info({ account: this.row.id, source }, `profile name: ${before} → ${name}`)
+    this.ctx.bus.publish('profile.update', this.row.id, { name, about: this.profileCache?.about ?? null, photo: !!this.profileCache?.photo })
+  }
+
+  /** Read name, info and (optionally) photo from WhatsApp. */
+  async refreshProfile(withPhoto = true): Promise<ProfileRow | null> {
+    const sock = this.sock
+    if (!sock || this.state !== 'open' || !this.row.me_jid) return this.profileCache
+    if (!this.profileCache) await this.loadProfile()
+    const me = bareJid(this.row.me_jid)!
+    const name = sock.authState.creds.me?.name
+    if (name && !BAD_NAMES.has(name)) await this.onProfileName(name, 'whatsapp')
+    else {
+      // some sessions never get the name in their credentials: use the public name WhatsApp spreads for our own number
+      const self = (await this.ctx.h.db.selectFrom('contacts').select('notify').where('account_id', '=', this.row.id).where('jid', '=', me).executeTakeFirst()) as { notify: string | null } | undefined
+      if (self?.notify && !BAD_NAMES.has(self.notify.trim())) await this.onProfileName(self.notify, 'whatsapp')
+    }
+    if (this.missingName() && !this.nameResynced) {
+      // the name lives in WhatsApp's account settings (app state "critical_block"): ask for a full copy once
+      this.nameResynced = true
+      try {
+        await sock.authState.keys.set({ 'app-state-sync-version': { critical_block: null } } as never)
+        await sock.resyncAppState(['critical_block'], true)
+        logger.info({ account: this.row.id, found: !this.missingName() }, 'profile name requested from WhatsApp account settings')
+      } catch (e) {
+        logger.warn({ account: this.row.id, err: String(e) }, 'could not read the profile name from WhatsApp account settings')
+      }
+    }
+    const patch: { about?: string | null; photo?: Buffer | null; photoType?: string } = {}
+    try {
+      const r = (await sock.fetchStatus(me)) as { status?: { status?: string | null } | null }[] | undefined
+      if (r && r.length) patch.about = r[0]?.status?.status?.trim() || null
+    } catch {
+      /* keep the previous info */
+    }
+    if (withPhoto) {
+      try {
+        const url = await sock.profilePictureUrl(me, 'image', 15_000)
+        if (url) {
+          const res = await fetch(url, { signal: AbortSignal.timeout(20_000) })
+          if (res.ok) {
+            patch.photo = Buffer.from(await res.arrayBuffer())
+            patch.photoType = res.headers.get('content-type') ?? 'image/jpeg'
+          }
+        } else patch.photo = null
+      } catch (e) {
+        const code = (e as { output?: { statusCode?: number }; message?: string })?.output?.statusCode
+        if (code === 404 || /item-not-found|not-authorized/.test(String((e as Error)?.message))) patch.photo = null
+      }
+    }
+    if (Object.keys(patch).length) await this.saveProfile(patch)
+    return this.profileCache
+  }
+
+  async profile() {
+    if (!this.profileCache) await this.loadProfile()
+    const p = this.profileCache
+    return {
+      id: this.row.id,
+      phone: this.row.me_jid ? '+' + userOf(this.row.me_jid) : this.row.phone ? '+' + this.row.phone : null,
+      name: this.displayName(),
+      about: p?.about ?? null,
+      photo: !!p?.photo,
+      updatedAt: p?.updated_at ? new Date(p.updated_at).toISOString() : null,
+    }
+  }
+
+  photoData(): { data: Buffer; type: string } | null {
+    const p = this.profileCache
+    return p?.photo ? { data: Buffer.from(p.photo, 'base64'), type: p.photo_type ?? 'image/jpeg' } : null
+  }
+
+  /** Change the profile on WhatsApp itself (so WhatsOps and WhatsApp always show the same). */
+  async editProfile(e: { name?: string; about?: string; photo?: Buffer | null }) {
+    const sock = this.requireOpen()
+    const me = bareJid(this.row.me_jid)!
+    if (e.name !== undefined) {
+      const name = e.name.trim()
+      if (name.length < 1 || name.length > 25) throw new AppError('PROFILE_NAME', 'The name must be 1–25 characters', 400)
+      await sock.updateProfileName(name)
+      await this.onProfileName(name, 'whatsops')
+    }
+    if (e.about !== undefined) {
+      const about = e.about.trim()
+      if (about.length > 139) throw new AppError('PROFILE_ABOUT', 'The info must be at most 139 characters', 400)
+      await sock.updateProfileStatus(about)
+      await this.saveProfile({ about: about || null })
+    }
+    if (e.photo === null) {
+      await sock.removeProfilePicture(me)
+      await this.saveProfile({ photo: null })
+    } else if (e.photo) {
+      await sock.updateProfilePicture(me, e.photo)
+      await sleep(1500)
+      await this.refreshProfile(true)
+    }
+    logger.info({ account: this.row.id, name: e.name !== undefined, about: e.about !== undefined, photo: e.photo === undefined ? undefined : e.photo ? 'set' : 'removed' }, 'profile edited')
+    return this.profile()
   }
 
   requireOpen(): WASocket {

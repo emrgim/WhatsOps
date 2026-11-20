@@ -111,6 +111,11 @@ export const TABLES: TableDef[] = [
     ],
     pk: ['id'],
   },
+  {
+    name: 'profiles',
+    cols: [['account_id', 'id', 'notnull'], ['about', 'long'], ['photo', 'long'], ['photo_type', 'short'], ['updated_at', 'big']],
+    pk: ['account_id'],
+  },
   { name: 'auth_creds', cols: [['account_id', 'id', 'notnull'], ['data', 'long'], ['updated_at', 'big']], pk: ['account_id'] },
   {
     name: 'auth_keys',

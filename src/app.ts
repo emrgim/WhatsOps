@@ -7,6 +7,9 @@ import type { WaService } from './wa/service.js'
 import type { WaAccount } from './wa/account.js'
 import { AdminAuth, ApiKeys, SESSION_COOKIE, type Principal } from './security/auth.js'
 import type { OAuthServer } from './security/oauth.js'
+import type { Reports } from './reports.js'
+import type { Updater } from './update.js'
+import type { License } from './license.js'
 import { AppError } from './util.js'
 
 export type App = {
@@ -19,6 +22,9 @@ export type App = {
   apiKeys: ApiKeys
   oauth: OAuthServer
   webhooks: WebhookDispatcher
+  reports: Reports
+  updater: Updater
+  license: License
   restart: (reason: string) => void
 }
 

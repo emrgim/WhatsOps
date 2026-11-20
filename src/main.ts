@@ -20,6 +20,16 @@ import { AppError } from './util.js'
 import { localizeError, reqLang, setServerLanguage, tr } from './i18n.js'
 import { primeTheme } from './theme.js'
 import type { App } from './app.js'
+import { Reports, recordCrashSync } from './reports.js'
+import { Updater } from './update.js'
+import { License } from './license.js'
+
+// a crash is written to disk first (Settings → Feedback offers to send it), then systemd/launchd restarts us
+process.on('uncaughtException', (e, origin) => {
+  recordCrashSync(e, origin)
+  logger.fatal({ err: String((e as Error)?.stack ?? e) }, 'crash: uncaught exception')
+  setTimeout(() => process.exit(1), 200)
+})
 
 function takeLock(): () => void {
   const lock = path.join(config.dataDir, 'service.lock')
@@ -76,6 +86,15 @@ async function main() {
   const oauth = new OAuthServer(h, settings, admin)
   const webhooks = new WebhookDispatcher(h, bus)
   await webhooks.start()
+  const reports = new Reports(h, settings, () => ({
+    Database: h.dialect,
+    Numbers: String(accounts.list().length),
+    Language: settings.get().language,
+    Install: fs.existsSync(path.join(path.dirname(new URL(import.meta.url).pathname), '..', '.git')) ? 'git' : 'other',
+  }))
+  await reports.start()
+  const license = new License(h, () => reports.code)
+  await license.start()
 
   const fastify = Fastify({ loggerInstance: logger, logController: new LogController({ disableRequestLogging: true }), trustProxy: true, bodyLimit: 100 * 1024 * 1024 }) as unknown as FastifyInstance
   fastify.setValidatorCompiler(validatorCompiler)
@@ -126,6 +145,7 @@ async function main() {
     process.exit(code)
   }
 
+  const updater = new Updater(h, settings, (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref())
   const app: App = {
     h,
     settings,
@@ -136,6 +156,9 @@ async function main() {
     apiKeys,
     oauth,
     webhooks,
+    reports,
+    updater,
+    license,
     // systemd (Restart=always) brings us back with the new configuration
     restart: (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref(),
   }
@@ -169,6 +192,7 @@ async function main() {
   logger.info({ host: config.host, port: config.port }, 'listening')
 
   await accounts.loadAll()
+  updater.start()
 
   setInterval(() => {
     void oauth.prune().catch(() => undefined)
@@ -181,6 +205,7 @@ async function main() {
 }
 
 main().catch((e) => {
+  recordCrashSync(e, 'startup')
   logger.fatal({ err: String((e as Error)?.stack ?? e) }, 'startup failed')
   process.exit(1)
 })

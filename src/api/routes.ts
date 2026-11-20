@@ -61,6 +61,12 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   f.get('/static/app.css', { schema: { hide: true } }, sendFile('app.css', 'text/css; charset=utf-8', 60))
   f.get('/static/base.css', { schema: { hide: true } }, sendFile('base.css', 'text/css; charset=utf-8', 300))
   f.get('/static/theme.js', { schema: { hide: true } }, sendFile('theme.js', 'application/javascript; charset=utf-8', 300))
+  const LOGOS: Record<string, string> = { 'cursor.svg': 'image/svg+xml', 'claude.svg': 'image/svg+xml', 'chatgpt.svg': 'image/svg+xml', 'grok.svg': 'image/svg+xml', 'gemini.svg': 'image/svg+xml', 'mcp.svg': 'image/svg+xml', 'hermes.png': 'image/png', 'grokbot.png': 'image/png' }
+  f.get('/static/logos/:name', { schema: { hide: true, params: z.object({ name: z.string() }) } }, async (req, reply) => {
+    const type = LOGOS[req.params.name]
+    if (!type) return reply.code(404).send()
+    return reply.type(type).header('cache-control', 'public, max-age=86400').send(fs.readFileSync(path.join(PUBLIC_DIR, 'logos', req.params.name)))
+  })
   f.get('/static/fonts/:name', { schema: { hide: true } }, async (req, reply) => {
     const name = (req.params as { name: string }).name
     if (!/^[a-z0-9-]+\.woff2$/.test(name)) return reply.code(404).send()
@@ -175,7 +181,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     '/v1/accounts',
     {
       preHandler: guard('admin'),
-      schema: { ...tags('Accounts'), summary: 'Add a WhatsApp number', body: z.object({ label: z.string().min(1), id: z.string().optional(), phone: z.string().optional(), syncHistory: z.boolean().optional() }) },
+      schema: { ...tags('Accounts'), summary: 'Add a WhatsApp number (its id becomes the phone number and its name the WhatsApp profile name once linked)', body: z.object({ label: z.string().optional(), id: z.string().optional(), phone: z.string().optional(), syncHistory: z.boolean().optional() }) },
     },
     async (req, reply) => {
       const a = await app.accounts.create(req.body)
@@ -184,6 +190,50 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   )
 
   f.get('/v1/accounts/:id', { preHandler: guard('read'), schema: { ...tags('Accounts'), summary: 'Account status', params: z.object({ id: z.string() }) } }, async (req) => accountFor(app, P(req), req.params.id).status())
+
+  // ---- profile of the number (name = WhatsOps name, info, photo) — edits change WhatsApp itself
+  const imageFrom = async (b: { url?: string; base64?: string }): Promise<Buffer> => {
+    if (b.base64) return Buffer.from(b.base64.replace(/^data:[^;]+;base64,/, ''), 'base64')
+    if (b.url) return (await app.svc.fetchMedia(b.url)).buf
+    throw new AppError('PROFILE_PHOTO', 'Send the photo as url or base64', 400)
+  }
+  f.get('/v1/accounts/:id/profile', { preHandler: guard('read'), schema: { ...tags('Accounts'), summary: 'WhatsApp profile of the number: name, info, photo', params: z.object({ id: z.string() }) } }, async (req) =>
+    accountFor(app, P(req), req.params.id).profile(),
+  )
+  f.post('/v1/accounts/:id/profile/refresh', { preHandler: guard('read'), schema: { ...tags('Accounts'), summary: 'Read the profile from WhatsApp again now', params: z.object({ id: z.string() }) } }, async (req) => {
+    const a = accountFor(app, P(req), req.params.id)
+    await a.refreshProfile(true)
+    return a.profile()
+  })
+  f.patch(
+    '/v1/accounts/:id/profile',
+    {
+      preHandler: guard('send'),
+      schema: {
+        ...tags('Accounts'),
+        summary: 'Change the WhatsApp profile name and/or info (on WhatsApp itself)',
+        params: z.object({ id: z.string() }),
+        body: z.object({ name: z.string().max(25).optional(), about: z.string().max(139).optional() }),
+      },
+    },
+    async (req) => accountFor(app, P(req), req.params.id).editProfile(req.body),
+  )
+  f.get('/v1/accounts/:id/profile/photo', { preHandler: guard('read'), schema: { ...tags('Accounts'), summary: 'Profile photo (image)', params: z.object({ id: z.string() }) } }, async (req, reply) => {
+    const p = accountFor(app, P(req), req.params.id).photoData()
+    if (!p) throw new AppError('NO_PHOTO', 'This number has no profile photo', 404)
+    return reply.header('content-type', p.type).header('cache-control', 'private, max-age=60').send(p.data)
+  })
+  f.put(
+    '/v1/accounts/:id/profile/photo',
+    {
+      preHandler: guard('send'),
+      schema: { ...tags('Accounts'), summary: 'Set the WhatsApp profile photo (image url or base64)', params: z.object({ id: z.string() }), body: z.object({ url: z.string().optional(), base64: z.string().optional() }) },
+    },
+    async (req) => accountFor(app, P(req), req.params.id).editProfile({ photo: await imageFrom(req.body) }),
+  )
+  f.delete('/v1/accounts/:id/profile/photo', { preHandler: guard('send'), schema: { ...tags('Accounts'), summary: 'Remove the WhatsApp profile photo', params: z.object({ id: z.string() }) } }, async (req) =>
+    accountFor(app, P(req), req.params.id).editProfile({ photo: null }),
+  )
 
   f.get('/v1/accounts/:id/stats', { preHandler: guard('read'), schema: { ...tags('Accounts'), summary: 'Stored data counts', params: z.object({ id: z.string() }) } }, async (req) =>
     app.svc.stats(accountFor(app, P(req), req.params.id)),
@@ -473,8 +523,17 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       language: { server: defaultLang(), setting: app.settings.get().language },
       theme: { appearance: app.settings.get().appearance, mode: currentTheme(app.settings.get().appearance).mode, desktop: desktopTheme()?.name ?? null },
       uptimeSec: Math.round(process.uptime()),
+      installation: app.reports.code,
+      license: { enabled: app.license.enabled },
     }
   })
+
+  // ---- license (Polar) — off while WhatsOps is free
+  f.get('/v1/admin/license', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'License state (off while WhatsOps is free)' } }, async () => app.license.status())
+  f.post('/v1/admin/license', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Activate a license key bought on Polar', body: z.object({ key: z.string().max(200) }) } }, async (req) =>
+    app.license.activate(req.body.key),
+  )
+  f.delete('/v1/admin/license', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Remove the license from this installation' } }, async () => app.license.deactivate())
 
   f.get('/v1/admin/settings', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Get settings' } }, async () => app.settings.get())
   f.put(
@@ -496,15 +555,58 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
           maxMediaMb: z.number().optional(),
           language: z.enum(['auto', 'en', 'it']).optional(),
           appearance: z.enum(['light', 'dark', 'system']).optional(),
+          crashReports: z.enum(['ask', 'auto', 'off']).optional(),
+          autoUpdate: z.boolean().optional(),
         }),
       },
     },
     async (req) => {
       const s = await app.settings.update(req.body)
       setServerLanguage(s.language)
+      if (req.body.crashReports === 'auto') void app.reports.autoSend()
       return s
     },
   )
+
+  // ---- feedback, crash & malfunction reports (GitHub issues)
+  f.get('/v1/admin/feedback', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Feedback: installation code, pending crash/malfunction reports, sent reports' } }, async () => app.reports.status())
+  f.post(
+    '/v1/admin/feedback',
+    {
+      preHandler: guard('admin'),
+      schema: {
+        ...tags('Admin'),
+        summary: 'Send feedback (opens a public GitHub issue signed with this installation code)',
+        body: z.object({ kind: z.enum(['bug', 'idea', 'other']), title: z.string().max(300), message: z.string().max(10000), diagnostics: z.boolean().optional() }),
+      },
+    },
+    async (req) => app.reports.sendFeedback(req.body, 'web'),
+  )
+  f.post('/v1/admin/reports/:id/send', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Send a pending crash/malfunction report', params: z.object({ id: z.string() }) } }, async (req) =>
+    app.reports.sendReport(req.params.id, 'manual'),
+  )
+  f.delete('/v1/admin/reports/:id', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Discard a pending report', params: z.object({ id: z.string() }) } }, async (req) => {
+    if (!app.reports.discard(req.params.id)) throw new AppError('REPORT_NOT_FOUND', 'Report not found', 404)
+    return { ok: true }
+  })
+
+  // ---- updates from the GitHub repository
+  f.get('/v1/admin/update', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Version, latest release on GitHub, auto-update state' } }, async () => app.updater.status())
+  f.post('/v1/admin/update/check', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Check GitHub for a new release now' } }, async () => {
+    try {
+      await app.updater.check()
+    } catch {
+      throw new AppError('REPORT_UNREACHABLE', 'GitHub cannot be reached right now, try again later', 503)
+    }
+    return app.updater.status()
+  })
+  f.post('/v1/admin/update/apply', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Install the latest release now (the service restarts by itself)' } }, async () => {
+    const p = app.updater.apply('manual')
+    p.catch(() => undefined)
+    // quick refusals (no git, up to date, local changes) come back right away; the install itself runs on
+    await Promise.race([p, new Promise((r) => setTimeout(r, 3000))])
+    return app.updater.status()
+  })
 
   // ---- database location
   f.get('/v1/admin/database', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Current database' } }, async () => {

@@ -66,8 +66,65 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   tool('whatsapp_accounts', 'List WhatsApp numbers', 'List the WhatsApp numbers (accounts) configured on this server with their connection state.', 'read', {}, { readOnlyHint: true }, async () =>
     visibleAccounts(app, p).map((a) => {
       const s = a.status()
-      return { id: s.id, label: s.label, phone: s.me?.phone ?? (s.phone ? '+' + s.phone : null), name: s.me?.name ?? null, state: s.state, default: s.default }
+      return { id: s.id, name: s.name, phone: s.me?.phone ?? (s.phone ? '+' + s.phone : null), about: s.about, state: s.state, default: s.default }
     }),
+  )
+
+  tool(
+    'whatsapp_get_profile',
+    'Get a number\'s profile',
+    'Read the WhatsApp profile of one of the owner\'s numbers: name (the same name WhatsOps shows), info/about text and profile photo.',
+    'read',
+    { account, include_photo: z.boolean().optional().describe(L('Also return the profile photo as an image (default false)')) },
+    { readOnlyHint: true },
+    async (a) => {
+      const ac = acc(a.account)
+      const p = await ac.profile()
+      const photo = a.include_photo ? ac.photoData() : null
+      if (!photo) return p
+      return { content: [{ type: 'text', text: JSON.stringify(p, null, 2) }, { type: 'image', data: photo.data.toString('base64'), mimeType: photo.type }] }
+    },
+  )
+
+  tool(
+    'whatsapp_update_profile',
+    'Edit a number\'s profile',
+    'Change the WhatsApp profile of one of the owner\'s numbers ON WHATSAPP ITSELF (all contacts see it): name (1–25 characters, also the name in WhatsOps), info/about text (max 139) and/or profile photo (an http(s) image URL or a data: URL / base64), or remove the photo. Confirm the change with the user first.',
+    'send',
+    {
+      account,
+      name: z.string().min(1).max(25).optional().describe(L('New profile name')),
+      about: z.string().max(139).optional().describe(L('New info/about text (empty string clears it)')),
+      photo: z.string().optional().describe(L('New profile photo: http(s) image URL, data: URL or base64')),
+      remove_photo: z.boolean().optional().describe(L('Remove the profile photo')),
+    },
+    { destructiveHint: false, idempotentHint: true },
+    async (a) => {
+      const ac = acc(a.account)
+      let photo: Buffer | null | undefined
+      if (a.remove_photo) photo = null
+      else if (a.photo) photo = /^https?:\/\//i.test(a.photo) ? (await app.svc.fetchMedia(a.photo)).buf : Buffer.from(a.photo.replace(/^data:[^;]+;base64,/, ''), 'base64')
+      if (a.name === undefined && a.about === undefined && photo === undefined) throw new AppError('PROFILE_EMPTY', 'Nothing to change: give a name, an info text or a photo', 400)
+      return ac.editProfile({ name: a.name, about: a.about, photo })
+    },
+  )
+
+  tool(
+    'whatsops_feedback',
+    'Send feedback about WhatsOps',
+    'Send feedback about WhatsOps itself (a bug, an idea, anything else) to its developers. It opens a PUBLIC issue in the GitHub repository emrgim/mcp-mrg-whatsops, signed only with this installation code: never put phone numbers, names, message contents or keys in it. Show the text to the user and get their OK before sending.',
+    'read',
+    {
+      kind: z.enum(['bug', 'idea', 'other']).describe(L('bug = something does not work, idea = a request or an improvement, other = anything else')),
+      title: z.string().min(3).max(120).describe(L('Short title (3–120 characters)')),
+      message: z.string().min(5).max(8000).describe(L('What happened or what you would like, in detail')),
+      include_diagnostics: z.boolean().optional().describe(L('Attach technical info: WhatsOps version, operating system, database type, how many numbers are linked (no phone numbers, no messages). Default true.')),
+    },
+    { openWorldHint: true },
+    async (a) => {
+      const r = await app.reports.sendFeedback({ kind: a.kind, title: a.title, message: a.message, diagnostics: a.include_diagnostics ?? true }, 'mcp')
+      return { issue: r.number, url: r.url, installation: app.reports.code }
+    },
   )
 
   tool(

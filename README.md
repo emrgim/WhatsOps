@@ -8,7 +8,7 @@ One process holds one linked-device connection per number and exposes it three w
 
 - **MCP** (`/mcp`, Streamable HTTP) for AI agents: Claude, ChatGPT, Grok, Gemini, Cursor, Hermes… with OAuth 2.1 or API keys, plus a stdio proxy for stdio-only clients.
 - **REST API** (`/v1`) with OpenAPI docs at `/docs`, Server-Sent Events and signed webhooks.
-- **Config page** (`/`) to link numbers (QR code or phone-number pairing code), create API keys, connect MCP clients, manage webhooks, choose the database and the appearance (Light / Dark / System), and read the service log.
+- **Config page** (`/`) to link numbers (QR code or phone-number pairing code) and edit their WhatsApp profile, connect plugins and MCP clients, create API keys, manage webhooks, choose the database and the appearance (Light / Dark / System), read the service log, send feedback and get updates.
 
 English and Italian: the config page follows the browser language, the server (MCP tool texts, errors) follows the operating system language.
 
@@ -20,11 +20,15 @@ English and Italian: the config page follows the browser language, the server (M
 - Send text, media (URL or base64), location, reactions; edit / delete own messages; mark as read. Idempotency keys, per-number rate limit, per-chat pause, optional recipient allow-list.
 - OAuth 2.1 (PKCE, dynamic client registration, static client ids) with 24 h access tokens and 90-day sliding refresh tokens; scoped API keys (`read`, `send`, `admin`) limited to chosen numbers.
 - Admin sign-in with a one-time code sent to the number's own "Message yourself" chat, a one-time login link, or a password.
+- Each number's id is its **phone number** and its name is its **WhatsApp profile name**, kept live. Name, info and photo can be edited from the config page, the API or MCP: the change is made on WhatsApp itself, so the two never differ.
+- **Feedback** (Settings → Feedback, or the `whatsops_feedback` MCP tool) opens an issue in this repository without any GitHub login: every installation signs with its own installation code (`WO-XXXX-XXXX`).
+- **Crash and malfunction reports**: crashes and errors are kept (scrubbed of numbers, names, keys and paths) and sent only if you choose: ask first (default), send automatically, or don't collect. The same problem becomes one issue.
+- **Auto-update**: a `git clone` installation checks this repository's releases every 5 minutes, installs a new version by itself (fetch, `npm ci`, build, restart) and goes back to the previous one if the new one does not start. Installations with local changes are never touched.
 - Service log in **Settings → Log**, terminal style (`tail -f`): live, searchable, filterable by level, downloadable; every API change and MCP tool call is listed (never message bodies). Also kept as a rotating file in `<data>/logs/`.
 
 ## MCP tools
 
-`whatsapp_accounts`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
+`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
 
 ## Install (from source)
 
@@ -46,7 +50,7 @@ node dist/cli.js login-link    # prints a one-time admin URL, valid 30 minutes
 
 Open it, go to **Numbers → Add number**, and link the phone with the QR code or with a pairing code (WhatsApp → Linked devices → Link with phone number).
 
-Run it as a service: `deploy/mcp-mrg-whatsops.service` is a systemd user unit (adjust the paths, see the comments inside).
+Run it as a service: `deploy/mcp-mrg-whatsops.service` is a systemd user unit (adjust the paths, see the comments inside). Auto-update restarts the service by itself, so keep a service manager with automatic restart (systemd `Restart=always`, launchd `KeepAlive`).
 
 ### Expose it
 
@@ -54,7 +58,7 @@ WhatsOps listens on loopback only. Put it behind a reverse proxy or tunnel (Cadd
 
 ## Connect
 
-The config page, **Connectors → MCP**, shows ready-to-paste settings for each client.
+The config page, **Connectors**, lists plugins and MCP clients as tiles (Cursor, Claude, ChatGPT, Grok, Grok Bot, Hermes, Gemini, any other MCP client); open a tile for its ready-to-paste settings.
 
 - **OAuth clients** (Claude, ChatGPT, Gemini, Grok): add a remote MCP connector with `https://<your-host>/mcp`; the client registers itself and you approve it in the browser.
 - **API key clients** (Hermes, scripts): create a key in **Connectors → API** and send `Authorization: Bearer wam_…` (or `?token=wam_…`).
@@ -73,7 +77,7 @@ The full API vocabulary is in **Connectors → API** and at `/docs`.
 
 ### Webhooks
 
-Events: `message.received`, `message.sent`, `message.update`, `connection.update`, `history.sync`, `chat.update` (or `*`). Each delivery is a JSON `POST` signed with
+Events: `message.received`, `message.sent`, `message.update`, `connection.update`, `history.sync`, `chat.update`, `profile.update` (or `*`). Each delivery is a JSON `POST` signed with
 `X-WA-Signature: sha256=HMAC(secret, X-WA-Timestamp + "." + body)` and retried up to 5 times (1 min → 12 h). Live events are also available as SSE at `/v1/events`.
 
 ## CLI
@@ -91,6 +95,10 @@ node dist/cli.js status
 
 Everything is configured from the config page. Optional environment variables are listed in [`.env.example`](.env.example) (`WA_HOST`, `WA_PORT`, `WA_PUBLIC_URL`, `WA_DATA_DIR`, `WA_DB_URL`, `WA_LANG`, `WA_LOG_LEVEL`, `WA_THEME`).
 
+Forks: point feedback, reports and updates to your own repository with `WA_FEEDBACK_REPO=owner/repo`, `WA_FEEDBACK_TOKEN` (a fine-grained token with only *Issues: read & write* on that repository) and `WA_UPDATE_REPO`; `WA_UPDATE_INTERVAL_MIN` changes the update check interval.
+
+Licenses: WhatsOps is free. A [Polar](https://polar.sh) license check is built in but off; it turns on only when a Polar organization is set (`WA_POLAR_ORG_ID`).
+
 Data (database, media, backups) lives in `~/.local/share/mcp-mrg-whatsops/` (macOS: `~/Library/Application Support/mcp-mrg-whatsops/`), never in the repository.
 
 ## Notes
@@ -98,6 +106,7 @@ Data (database, media, backups) lives in `~/.local/share/mcp-mrg-whatsops/` (mac
 - WhatsOps is an unofficial WhatsApp Web client. Use it with your own numbers and follow WhatsApp's terms.
 - WhatsApp unlinks linked devices when the main phone stays offline for more than 14 days.
 - One server per number: do not link the same device to two programs at once.
+- The key in `src/issues-key.ts` can only open issues in this repository and nothing else; it is scrambled only so that secret scanners don't revoke it.
 
 ## Development
 

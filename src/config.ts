@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const VERSION = '1.0.0'
+export const VERSION = '1.1.0'
 
 function env(name: string, def = ''): string {
   const v = process.env[name]
