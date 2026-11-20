@@ -23,6 +23,7 @@ import type { App } from './app.js'
 import { Reports, recordCrashSync } from './reports.js'
 import { Updater } from './update.js'
 import { License } from './license.js'
+import { CurrentRmsPlugin } from './plugins/currentrms.js'
 
 // a crash is written to disk first (Settings → Feedback offers to send it), then systemd/launchd restarts us
 process.on('uncaughtException', (e, origin) => {
@@ -159,6 +160,7 @@ async function main() {
     reports,
     updater,
     license,
+    plugins: {} as App['plugins'],
     // systemd (Restart=always) brings us back with the new configuration
     restart: (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref(),
   }
@@ -185,6 +187,7 @@ async function main() {
     return payload
   })
 
+  app.plugins.currentrms = new CurrentRmsPlugin(app)
   oauth.register(fastify)
   registerRoutes(fastify, app)
 
@@ -193,6 +196,7 @@ async function main() {
 
   await accounts.loadAll()
   updater.start()
+  await app.plugins.currentrms.start()
 
   setInterval(() => {
     void oauth.prune().catch(() => undefined)

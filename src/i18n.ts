@@ -318,6 +318,20 @@ const IT: Record<string, string> = {
   'The license service cannot be reached right now, try again later': 'Il servizio licenze non è raggiungibile in questo momento, riprova più tardi',
   'Licenses are not enabled: WhatsOps is free': 'Le licenze non sono attive: WhatsOps è gratuito',
   'This license key is not valid': 'Questa chiave di licenza non è valida',
+  'Current RMS discussions': 'Discussioni Current RMS',
+  'List the discussions of Current RMS (OnRent Events) grouped by the record they belong to (opportunity, project, contact, invoice…), with whether each one is synced with a WhatsApp group.': 'Elenca le discussioni di Current RMS (OnRent Events) raggruppate per il record a cui appartengono (opportunità, progetto, contatto, fattura…), con lo stato di sincronizzazione con un gruppo WhatsApp.',
+  'Filter by record name or discussion subject': 'Filtra per nome del record o oggetto della discussione',
+  'Sync a Current RMS discussion': 'Sincronizza una discussione Current RMS',
+  'Turn the WhatsApp sync of a Current RMS discussion on or off. On: WhatsOps creates the WhatsApp group (or a group in the record\'s Community, per the plugin settings), adds the participants that have a WhatsApp number, posts the whole discussion and then mirrors new messages both ways. Confirm with the user first.': 'Accende o spegne la sincronizzazione WhatsApp di una discussione Current RMS. Accesa: WhatsOps crea il gruppo WhatsApp (o un gruppo nella Community del record, secondo le impostazioni del plugin), aggiunge i partecipanti che hanno un numero WhatsApp, pubblica tutta la discussione e poi riporta i nuovi messaggi nei due sensi. Chiedi prima conferma all\'utente.',
+  'Discussion id (from currentrms_discussions)': 'Id della discussione (da currentrms_discussions)',
+  'true = sync on, false = sync off': 'true = sincronizzazione accesa, false = spenta',
+  'Connect Current RMS first (subdomain and API key)': 'Collega prima Current RMS (sottodominio e chiave API)',
+  'Current RMS cannot be reached right now': 'Current RMS non è raggiungibile in questo momento',
+  'Current RMS refused the subdomain or the API key': 'Current RMS ha rifiutato il sottodominio o la chiave API',
+  'Current RMS answered {0}: {1}': 'Current RMS ha risposto {0}: {1}',
+  'Discussion {0} not found (refresh the list)': 'Discussione {0} non trovata (aggiorna l\'elenco)',
+  'WhatsApp did not create the group': 'WhatsApp non ha creato il gruppo',
+  'WhatsApp did not create the community': 'WhatsApp non ha creato la community',
 }
 
 /** All translatable keys (used by tests to make sure Italian covers every English string). */

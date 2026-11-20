@@ -24,11 +24,12 @@ English and Italian: the config page follows the browser language, the server (M
 - **Feedback** (Settings → Feedback, or the `whatsops_feedback` MCP tool) opens an issue in this repository without any GitHub login: every installation signs with its own installation code (`WO-XXXX-XXXX`).
 - **Crash and malfunction reports**: crashes and errors are kept (scrubbed of numbers, names, keys and paths) and sent only if you choose: ask first (default), send automatically, or don't collect. The same problem becomes one issue.
 - **Auto-update**: a `git clone` installation checks this repository's releases every 5 minutes, installs a new version by itself (fetch, `npm ci`, build, restart) and goes back to the previous one if the new one does not start. Installations with local changes are never touched.
+- **Plugins** (Connectors → Plugins). First one: **Current RMS** — see below.
 - Service log in **Settings → Log**, terminal style (`tail -f`): live, searchable, filterable by level, downloadable; every API change and MCP tool call is listed (never message bodies). Also kept as a rotating file in `<data>/logs/`.
 
 ## MCP tools
 
-`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
+`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
 
 ## Install (from source)
 
@@ -90,6 +91,21 @@ node dist/cli.js key --name N --scopes read,send[,admin] [--accounts id1,id2]
 node dist/cli.js db show | db set <sqlite:///path|postgres://…|mysql://…>
 node dist/cli.js status
 ```
+
+## Plugin: Current RMS
+
+Links the discussions of [Current RMS](https://www.current-rms.com) (OnRent Events) to a WhatsApp number. Connectors → Plugins → Current RMS:
+
+1. **Connection**: your subdomain (`yourcompany` from `yourcompany.current-rms.com`) and an API key (System Setup → Integrations → API). The key is stored on the server and never shown again.
+2. **Settings**:
+   - **WhatsApp number** that owns the groups.
+   - **Structure on WhatsApp**: *Single groups* — one group per discussion, fully isolated, nobody sees the other discussions; or *Community per record* — one Community per record (opportunity, project, contact…) with a group per discussion: messages stay sealed in each group and new members need approval, but Community members can see the names of all its groups.
+   - **Contacts custom field** that holds the WhatsApp number: only participants with a number there are added.
+   - People who can't be added (privacy settings) get the **invite link** privately (can be turned off).
+3. **Discussions**: listed by record, with participants and replies. Turning a discussion on creates the WhatsApp group (closed: only admins add people and change settings, approval on), adds the participants, posts the whole discussion grouped by day, then mirrors both ways: a new comment in Current RMS → a message in the group (`*Name*` + text); a message in the group → a comment in the discussion (as the matching contact when possible, otherwise `Name (WhatsApp): text`).
+4. **Instant updates**: turn webhooks on in Current RMS (System Setup → Company Information), then *Register webhooks*. WhatsOps must have a public HTTPS address (`WA_PUBLIC_URL`). Without webhooks, synced discussions are checked every 2 minutes.
+
+Groups are created one at a time with a pause between them, so WhatsApp does not see a burst. API calls stay under Current RMS' limit of 60 per minute. The same is available from the API (`/v1/plugins/currentrms/…`) and MCP (`currentrms_discussions`, `currentrms_set_sync`).
 
 ## Configuration
 

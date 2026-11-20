@@ -306,7 +306,7 @@ const MCP_CLIENTS = [
   { id: 'gemini', name: 'Gemini', logo: 'gemini.svg', match: /gemini/i },
   { id: 'other', nameKey: 'connect.other.title', logo: 'mcp.svg', mono: true },
 ]
-const PLUGINS = [] // installable plugins (Cursor, Claude, Hermes…) are listed here when published
+let PLUGINS = [] // from GET /v1/plugins
 const clientName = (c) => (c.nameKey ? t(c.nameKey) : c.name)
 function logo(c, big = false) {
   const u = `/static/logos/${c.logo}`
@@ -364,14 +364,148 @@ async function loadConnect() {
     : `<p class="muted">${esc(t('connect.noGrants'))}</p>`
 }
 async function loadPlugins() {
+  PLUGINS = await api('GET', '/v1/plugins')
   const item = routeItem
   const c = item && PLUGINS.find((x) => x.id === item)
   $('#pluginTiles').hidden = !!c
   $('#pluginBar').hidden = !!c || !PLUGINS.length
   $('#pluginDetail').hidden = !c
-  if (c) { $('#pluginDetail').innerHTML = `${detailHead(c, 'plugins')}<div class="card">${c.body ? c.body() : ''}</div>`; return }
+  if (c) { $('#pluginDetail').innerHTML = detailHead(c, 'plugins') + (c.id === 'currentrms' ? CRMS_HTML() : ''); if (c.id === 'currentrms') await crmsLoad(); return }
   $('#pluginTiles').innerHTML = PLUGINS.length ? tiles(PLUGINS, 'plugins') : `<p class="muted">${esc(t('plugins.none'))}</p>`
 }
+
+// ---------------------------------------------------------------- plugin: Current RMS
+const CRMS = '/v1/plugins/currentrms'
+let crmsTimer = null
+const CRMS_HTML = () => `
+  <form class="card form" id="crmsConn">
+    <h3>${esc(t('crms.conn'))}</h3>
+    <div class="row"><label><span>${esc(t('crms.subdomain'))}</span> <input name="subdomain" placeholder="${esc(t('crms.subdomainPh'))}" autocomplete="off" spellcheck="false"></label>
+      <label><span>${esc(t('crms.apiKey'))}</span> <input name="apiKey" type="password" autocomplete="new-password" spellcheck="false"></label></div>
+    <p class="muted small">${esc(t('crms.keyHint'))}</p>
+    <div class="row"><button type="submit">${esc(t('save'))}</button><button type="button" class="ghost" data-crms="test">${esc(t('crms.test'))}</button></div>
+    <p id="crmsConnState" class="small"></p>
+  </form>
+  <form class="card form" id="crmsSet">
+    <h3>${esc(t('crms.settings'))}</h3>
+    <label><span>${esc(t('crms.account'))}</span> <select name="account"></select></label>
+    <div><span class="muted small">${esc(t('crms.mode'))}</span><br><div class="seg" role="radiogroup">
+      <label><input type="radio" name="mode" value="groups"><span>${esc(t('crms.mode.groups'))}</span></label>
+      <label><input type="radio" name="mode" value="community"><span>${esc(t('crms.mode.community'))}</span></label></div>
+      <p class="muted small" id="crmsModeHint"></p></div>
+    <label><span>${esc(t('crms.field'))}</span> <select name="whatsappField"></select></label>
+    <p class="muted small">${esc(t('crms.fieldHint'))}</p>
+    <label class="inline"><input type="checkbox" name="inviteFallback"> <span>${esc(t('crms.invite'))}</span></label>
+    <button type="submit">${esc(t('save'))}</button>
+  </form>
+  <div class="card form">
+    <h3>${esc(t('crms.hooks'))}</h3>
+    <p id="crmsHookState"></p>
+    <p class="muted small">${esc(t('crms.hooksHint'))}</p>
+    <button type="button" class="ghost" data-crms="hooks">${esc(t('crms.hooksGo'))}</button>
+  </div>
+  <div class="card">
+    <div class="crms-bar"><h3>${esc(t('crms.discussions'))}</h3><input type="search" id="crmsQ" placeholder="${esc(t('crms.search'))}"><button type="button" class="ghost small" data-crms="refresh">${esc(t('crms.refresh'))}</button></div>
+    <p class="muted small" id="crmsInfo"></p>
+    <div id="crmsTree"></div>
+  </div>`
+function crmsModeHint(mode) { $('#crmsModeHint').textContent = t(mode === 'community' ? 'crms.modeHint.community' : 'crms.modeHint.groups') }
+async function crmsLoad() {
+  const s = await api('GET', CRMS)
+  const c = s.config
+  const f1 = $('#crmsConn'), f2 = $('#crmsSet')
+  f1.subdomain.value = c.subdomain || ''
+  f1.apiKey.placeholder = c.apiKeySet ? t('crms.keySaved') : ''
+  f2.account.innerHTML = state.accounts.map((a) => `<option value="${esc(a.id)}">${esc(a.name)} ${esc(a.me?.phone ?? '')}</option>`).join('')
+  f2.account.value = c.account || (state.accounts.find((a) => a.default)?.id ?? '')
+  $$('input[name=mode]', f2).forEach((i) => { i.checked = i.value === (c.mode || 'groups') })
+  crmsModeHint(c.mode)
+  f2.inviteFallback.checked = c.inviteFallback !== false
+  f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + (c.whatsappField ? `<option value="${esc(c.whatsappField)}">${esc(c.whatsappField)}</option>` : '')
+  f2.whatsappField.value = c.whatsappField || ''
+  const hookErr = c.hooksError === 'NO_PUBLIC_URL' ? t('crms.hooksNoPublic') : c.hooksError
+  $('#crmsHookState').textContent = c.hooks?.length ? t('crms.hooksOn', c.hooks.length) + (hookErr ? ' · ' + hookErr : '') : hookErr || t('crms.hooksOff')
+  $('#crmsConnState').textContent = s.configured ? t('crms.connected', c.subdomain) : t('crms.notConnected')
+  if (s.configured) {
+    api('GET', CRMS + '/custom-fields').then((fields) => {
+      f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + fields.map((x) => `<option value="${esc(x.key)}">${esc(x.name)}</option>`).join('')
+      f2.whatsappField.value = c.whatsappField || ''
+    }).catch(() => {})
+    await crmsTree()
+  } else $('#crmsTree').innerHTML = `<p class="muted">${esc(t('crms.connectFirst'))}</p>`
+}
+const CRMS_TYPES = ['Opportunity', 'Project', 'Member', 'Invoice', 'Item', 'Product', 'Service', 'Activity', 'Quarantine', 'PurchaseOrder']
+async function crmsRefresh() {
+  $('#crmsInfo').textContent = t('crms.reading')
+  const s = await api('POST', CRMS + '/refresh')
+  await crmsTree()
+  if (s.refreshing) crmsWatch()
+}
+function crmsWatch() {
+  setTimeout(async () => {
+    if (routeItem !== 'currentrms') return
+    const s = await api('GET', CRMS).catch(() => null)
+    await crmsTree().catch(() => {})
+    if (s?.refreshing) { $('#crmsInfo').textContent += ' · ' + t('crms.reading'); crmsWatch() }
+  }, 5000)
+}
+async function crmsTree() {
+  const q = $('#crmsQ')?.value ?? ''
+  const tree = await api('GET', CRMS + '/discussions' + (q ? '?q=' + encodeURIComponent(q) : ''))
+  const n = tree.reduce((a, g) => a + g.discussions.length, 0)
+  const on = tree.reduce((a, g) => a + g.discussions.filter((d) => d.sync).length, 0)
+  $('#crmsInfo').textContent = t('crms.count', num(tree.length), num(n), num(on))
+  $('#crmsTree').innerHTML = tree.length ? tree.map((g) => `<div class="crms-rec">
+      <div class="crms-rec-head"><span class="badge">${esc(CRMS_TYPES.includes(g.type) ? t('crms.type.' + g.type) : g.type)}</span> <b>${esc(g.name)}</b> <a class="small" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(t('crms.open'))} ↗</a></div>
+      ${g.discussions.map((d) => `<div class="crms-disc" data-disc="${esc(d.id)}">
+        <label class="switch" title="${esc(t('crms.syncToggle'))}"><input type="checkbox" ${d.sync ? 'checked' : ''} data-sync="${esc(d.id)}"><span></span></label>
+        <div class="crms-disc-main"><div><b>${esc(d.subject || '#' + d.id)}</b></div>
+          <div class="muted small">${esc(t('crms.people', d.participants.length, d.participants.filter((p) => p.whatsapp).length))}${d.replies != null ? ' · ' + esc(t('crms.replies', d.replies)) : ''}${d.lastAt ? ' · ' + esc(fmtDate(d.lastAt)) : ''}</div>
+          ${d.participants.length ? `<div class="muted small">${d.participants.map((p) => esc(p.name) + (p.whatsapp ? ' ✓' : '')).join(', ')}</div>` : ''}
+          ${d.error ? `<div class="small err-text">${esc(d.error)}</div>` : ''}</div>
+        <span class="badge ${d.state === 'on' ? 'open' : d.state === 'error' ? 'bad' : d.state === 'creating' ? 'warn' : ''}">${esc(t('crms.state.' + (d.state || 'off')))}</span>
+      </div>`).join('')}</div>`).join('') : `<p class="muted">${esc(t('crms.none'))}</p>`
+  clearTimeout(crmsTimer)
+  if (tree.some((g) => g.discussions.some((d) => d.state === 'creating'))) crmsTimer = setTimeout(() => routeItem === 'currentrms' && crmsTree().catch(() => {}), 4000)
+}
+document.addEventListener('submit', run(async (e) => {
+  if (e.target.id === 'crmsConn') {
+    e.preventDefault()
+    const f = e.target
+    await api('PUT', CRMS + '/config', { subdomain: f.subdomain.value, ...(f.apiKey.value ? { apiKey: f.apiKey.value } : {}) })
+    f.apiKey.value = ''
+    const r = await api('POST', CRMS + '/test')
+    toast(t('crms.testOk', num(r.discussions)))
+    await crmsLoad()
+    await crmsRefresh()
+  } else if (e.target.id === 'crmsSet') {
+    e.preventDefault()
+    const f = e.target
+    await api('PUT', CRMS + '/config', { account: f.account.value, mode: f.querySelector('input[name=mode]:checked')?.value ?? 'groups', whatsappField: f.whatsappField.value, inviteFallback: f.inviteFallback.checked })
+    toast(t('saved'))
+  }
+}))
+document.addEventListener('change', run(async (e) => {
+  if (e.target.name === 'mode' && e.target.closest('#crmsSet')) crmsModeHint(e.target.value)
+  const sw = e.target.closest('[data-sync]')
+  if (!sw) return
+  const on = sw.checked
+  if (on && !confirm(t('crms.confirmOn'))) { sw.checked = false; return }
+  try { await api('PUT', `${CRMS}/discussions/${encodeURIComponent(sw.dataset.sync)}`, { sync: on }) } catch (x) { sw.checked = !on; throw x }
+  await crmsTree()
+}))
+document.addEventListener('click', run(async (e) => {
+  const b = e.target.closest('[data-crms]')
+  if (!b) return
+  b.disabled = true
+  try {
+    if (b.dataset.crms === 'test') { const r = await api('POST', CRMS + '/test'); toast(t('crms.testOk', num(r.discussions))) }
+    if (b.dataset.crms === 'hooks') { await api('POST', CRMS + '/webhooks'); await crmsLoad() }
+    if (b.dataset.crms === 'refresh') await crmsRefresh()
+  } finally { b.disabled = false }
+}))
+let crmsQT = null
+document.addEventListener('input', (e) => { if (e.target.id === 'crmsQ') { clearTimeout(crmsQT); crmsQT = setTimeout(() => crmsTree().catch(() => {}), 300) } })
 async function loadSessions() {
   const s = await api('GET', '/v1/admin/sessions')
   $('#sessions').innerHTML = `<table><tr><th>${t('th.access')}</th><th>${t('th.created')}</th><th>${t('th.lastUsed')}</th><th></th></tr>${s.map((x) => `<tr><td>${esc(x.label)}</td><td>${fmtDate(x.created_at)}</td><td>${fmtDate(x.last_seen)}</td><td><button class="small danger" data-revoke-sess="${esc(x.id_hash)}">${esc(t('revoke'))}</button></td></tr>`).join('')}</table>`
@@ -497,7 +631,7 @@ $('#hookList').addEventListener('click', run(async (e) => {
 // ---------------------------------------------------------------- api vocabulary
 let vocab = null
 const VOCAB_METHODS = ['get', 'post', 'put', 'patch', 'delete']
-const VOCAB_ORDER = ['Send', 'Messages', 'Accounts', 'Contacts', 'Groups', 'Events', 'Webhooks', 'Admin']
+const VOCAB_ORDER = ['Send', 'Messages', 'Accounts', 'Contacts', 'Groups', 'Events', 'Webhooks', 'Plugins', 'Admin']
 async function loadApi() {
   $('#apiBase').textContent = ORIGIN + '/v1'
   await loadKeys()

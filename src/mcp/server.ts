@@ -110,6 +110,30 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   )
 
   tool(
+    'currentrms_discussions',
+    'Current RMS discussions',
+    'List the discussions of Current RMS (OnRent Events) grouped by the record they belong to (opportunity, project, contact, invoice…), with whether each one is synced with a WhatsApp group.',
+    'read',
+    { search: z.string().max(200).optional().describe(L('Filter by record name or discussion subject')) },
+    { readOnlyHint: true },
+    async (a) => {
+      const pl = app.plugins.currentrms
+      if (!pl.configured()) throw new AppError('CRMS_NOT_CONFIGURED', 'Connect Current RMS first (subdomain and API key)', 409)
+      return pl.tree(a.search)
+    },
+  )
+
+  tool(
+    'currentrms_set_sync',
+    'Sync a Current RMS discussion',
+    'Turn the WhatsApp sync of a Current RMS discussion on or off. On: WhatsOps creates the WhatsApp group (or a group in the record\'s Community, per the plugin settings), adds the participants that have a WhatsApp number, posts the whole discussion and then mirrors new messages both ways. Confirm with the user first.',
+    'send',
+    { discussion_id: z.string().describe(L('Discussion id (from currentrms_discussions)')), sync: z.boolean().describe(L('true = sync on, false = sync off')) },
+    { openWorldHint: true },
+    async (a) => app.plugins.currentrms.setSync(a.discussion_id, a.sync),
+  )
+
+  tool(
     'whatsops_feedback',
     'Send feedback about WhatsOps',
     'Send feedback about WhatsOps itself (a bug, an idea, anything else) to its developers. It opens a PUBLIC issue in the GitHub repository emrgim/mcp-mrg-whatsops, signed only with this installation code: never put phone numbers, names, message contents or keys in it. Show the text to the user and get their OK before sending.',

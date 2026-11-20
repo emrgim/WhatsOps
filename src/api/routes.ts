@@ -17,6 +17,7 @@ import { importHistoryDb, importMultiFileSession } from '../wa/import.js'
 import { handleMcpRequest } from '../mcp/server.js'
 import { defaultLang, reqLang, setServerLanguage, tr } from '../i18n.js'
 import { currentTheme, desktopTheme } from '../theme.js'
+import { registerCurrentRms } from '../plugins/currentrms.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -61,7 +62,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   f.get('/static/app.css', { schema: { hide: true } }, sendFile('app.css', 'text/css; charset=utf-8', 60))
   f.get('/static/base.css', { schema: { hide: true } }, sendFile('base.css', 'text/css; charset=utf-8', 300))
   f.get('/static/theme.js', { schema: { hide: true } }, sendFile('theme.js', 'application/javascript; charset=utf-8', 300))
-  const LOGOS: Record<string, string> = { 'cursor.svg': 'image/svg+xml', 'claude.svg': 'image/svg+xml', 'chatgpt.svg': 'image/svg+xml', 'grok.svg': 'image/svg+xml', 'gemini.svg': 'image/svg+xml', 'mcp.svg': 'image/svg+xml', 'hermes.png': 'image/png', 'grokbot.png': 'image/png' }
+  const LOGOS: Record<string, string> = { 'cursor.svg': 'image/svg+xml', 'claude.svg': 'image/svg+xml', 'chatgpt.svg': 'image/svg+xml', 'grok.svg': 'image/svg+xml', 'gemini.svg': 'image/svg+xml', 'mcp.svg': 'image/svg+xml', 'hermes.png': 'image/png', 'grokbot.png': 'image/png', 'currentrms.png': 'image/png' }
   f.get('/static/logos/:name', { schema: { hide: true, params: z.object({ name: z.string() }) } }, async (req, reply) => {
     const type = LOGOS[req.params.name]
     if (!type) return reply.code(404).send()
@@ -527,6 +528,12 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       license: { enabled: app.license.enabled },
     }
   })
+
+  // ---- plugins
+  f.get('/v1/plugins', { preHandler: guard('admin'), schema: { ...tags('Plugins'), summary: 'Installed plugins' } }, async () => [
+    { id: 'currentrms', name: 'Current RMS', logo: 'currentrms.png', configured: app.plugins.currentrms.configured() },
+  ])
+  registerCurrentRms(fastify, app, app.plugins.currentrms, guard, tags)
 
   // ---- license (Polar) — off while WhatsOps is free
   f.get('/v1/admin/license', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'License state (off while WhatsOps is free)' } }, async () => app.license.status())

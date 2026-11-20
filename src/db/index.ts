@@ -111,6 +111,22 @@ export const TABLES: TableDef[] = [
     ],
     pk: ['id'],
   },
+  // plugin Current RMS: discussions ⇄ WhatsApp groups
+  {
+    name: 'crms_discussions',
+    cols: [
+      ['id', 'id', 'notnull'], ['subject', 'name'], ['object_type', 'short'], ['object_id', 'id'], ['object_name', 'name'], ['participants', 'long'],
+      ['reply_count', 'int'], ['last_comment_id', 'big'], ['last_at', 'big'], ['sync', 'int'], ['state', 'short'], ['group_jid', 'key'], ['error', 'long'],
+      ['synced_comment_id', 'big'], ['created_at', 'big'],
+    ],
+    pk: ['id'],
+  },
+  { name: 'crms_objects', cols: [['key', 'key', 'notnull'], ['community_jid', 'key'], ['name', 'name'], ['created_at', 'big']], pk: ['key'] },
+  {
+    name: 'crms_map',
+    cols: [['discussion_id', 'id', 'notnull'], ['comment_id', 'id', 'notnull'], ['wa_id', 'id', 'notnull'], ['dir', 'short'], ['at', 'big']],
+    pk: ['discussion_id', 'comment_id', 'wa_id'],
+  },
   {
     name: 'profiles',
     cols: [['account_id', 'id', 'notnull'], ['about', 'long'], ['photo', 'long'], ['photo_type', 'short'], ['updated_at', 'big']],

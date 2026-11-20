@@ -10,6 +10,7 @@ import type { OAuthServer } from './security/oauth.js'
 import type { Reports } from './reports.js'
 import type { Updater } from './update.js'
 import type { License } from './license.js'
+import type { CurrentRmsPlugin } from './plugins/currentrms.js'
 import { AppError } from './util.js'
 
 export type App = {
@@ -25,6 +26,7 @@ export type App = {
   reports: Reports
   updater: Updater
   license: License
+  plugins: { currentrms: CurrentRmsPlugin }
   restart: (reason: string) => void
 }
 
