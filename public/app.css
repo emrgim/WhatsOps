@@ -198,3 +198,6 @@ ul.sent{margin:0;padding-left:18px}ul.sent li{margin:4px 0}
 .crms-user-access select{width:auto;margin:0}
 .crms-invite-out,.user-link{margin-top:6px}
 .crms-invite-out code,.user-link code{word-break:break-all}
+
+#crmsPoll{margin-top:4px}
+.card div:has(> #crmsPoll){margin-top:16px}

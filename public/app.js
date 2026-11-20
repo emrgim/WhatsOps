@@ -431,7 +431,17 @@ const CRMS_HTML = (st) => {
     <p id="crmsHookState"></p>
     <p class="muted small">${esc(t('crms.hooksHint'))}</p>
     <button type="button" class="ghost" data-crms="hooks">${esc(t('crms.hooksGo'))}</button>
+    <div><span class="muted small">${esc(t('crms.poll'))}</span><br><div class="seg" role="radiogroup" id="crmsPoll">
+      ${[2, 5, 15, 30].map((m) => `<label><input type="radio" name="pollMinutes" value="${m}"><span>${esc(t('crms.pollMin', m))}</span></label>`).join('')}</div>
+      <p class="muted small" id="crmsPollHint"></p></div>
   </div>` + discussions
+}
+function crmsHookState(c) {
+  const every = c.pollMinutes || 2
+  const hookErr = c.hooksError === 'NO_PUBLIC_URL' ? t('crms.hooksNoPublic', every) : c.hooksError
+  $('#crmsHookState').textContent = c.hooks?.length ? t('crms.hooksOn', c.hooks.length) + (hookErr ? ' · ' + hookErr : '') : hookErr || t('crms.hooksOff', every)
+  $$('#crmsPoll input').forEach((i) => { i.checked = Number(i.value) === every })
+  $('#crmsPollHint').textContent = t(c.hooks?.length ? 'crms.pollHintHooks' : 'crms.pollHint', every)
 }
 function crmsModeHint(mode) { const el = $('#crmsModeHint'); if (el) el.textContent = t(mode === 'community' ? 'crms.modeHint.community' : 'crms.modeHint.groups') }
 async function crmsLoad(st) {
@@ -455,8 +465,7 @@ async function crmsLoad(st) {
     f2.ownerAdmin.checked = c.ownerAdmin !== false
     f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + (c.whatsappField ? `<option value="${esc(c.whatsappField)}">${esc(c.whatsappField)}</option>` : '')
     f2.whatsappField.value = c.whatsappField || ''
-    const hookErr = c.hooksError === 'NO_PUBLIC_URL' ? t('crms.hooksNoPublic') : c.hooksError
-    $('#crmsHookState').textContent = c.hooks?.length ? t('crms.hooksOn', c.hooks.length) + (hookErr ? ' · ' + hookErr : '') : hookErr || t('crms.hooksOff')
+    crmsHookState(c)
     $('#crmsConnState').textContent = s.configured ? t('crms.connected', c.subdomain) : t('crms.notConnected')
     if (s.configured) {
       api('GET', CRMS + '/custom-fields').then((fields) => {
@@ -556,6 +565,12 @@ document.addEventListener('change', run(async (e) => {
     f.backupAccount.innerHTML = `<option value="">${esc(t('crms.backupNone'))}</option>` + (state.accounts ?? []).filter((a) => a.id !== f.account.value).map((a) => `<option value="${esc(a.id)}">${esc(a.name)} ${esc(a.me?.phone ?? '')}</option>`).join('')
     f.backupAccount.value = keep !== f.account.value ? keep : ''
   }
+  if (e.target.name === 'pollMinutes' && e.target.closest('#crmsPoll')) {
+    const s = await api('PUT', CRMS + '/config', { pollMinutes: Number(e.target.value) })
+    crmsHookState(s.config)
+    toast(t('saved'))
+    return
+  }
   const acc = e.target.closest('[data-uacc],[data-uscope],[data-umanage]')
   if (acc) {
     const id = acc.dataset.uacc ?? acc.dataset.uscope ?? acc.dataset.umanage
@@ -592,7 +607,7 @@ document.addEventListener('click', run(async (e) => {
   b.disabled = true
   try {
     if (b.dataset.crms === 'test') { const r = await api('POST', CRMS + '/test'); toast(t('crms.testOk', num(r.discussions))) }
-    if (b.dataset.crms === 'hooks') { await api('POST', CRMS + '/webhooks'); await crmsLoad() }
+    if (b.dataset.crms === 'hooks') { const s = await api('POST', CRMS + '/webhooks'); crmsHookState(s.config) }
     if (b.dataset.crms === 'refresh') await crmsRefresh()
   } finally { b.disabled = false }
 }))

@@ -32,7 +32,7 @@ import type { WaAccount } from '../wa/account.js'
 export const PLUGIN_ID = 'currentrms'
 const API = (process.env.WA_CRMS_API || 'https://api.current-rms.com/api/v1').replace(/\/+$/, '')
 const CONFIG_KEY = 'plugin:currentrms'
-const POLL_MS = 120_000
+export const POLL_CHOICES = [2, 5, 15, 30] as const // minutes between checks of the synced discussions
 const LIST_REFRESH_MS = 30 * 60_000
 const GROUP_GAP_MS = 45_000 // never create WhatsApp groups in a burst
 const MAX_CHUNK = 3500
@@ -46,11 +46,12 @@ export type CrmsConfig = {
   inviteFallback: boolean // send the invite link privately to people who can't be added
   ownerAdmin: boolean // the owner of the record in Current RMS (a user with a registered number) is admin of its groups
   backupAccount: string // second WhatsOps number: admin of every group and Community, takes over if the main one is offline
+  pollMinutes: number // check the synced discussions every N minutes (2, 5, 15, 30); webhooks bring changes at once anyway
   hookSecret: string
   hooks: { id: number; event: string }[]
   hooksError: string | null
 }
-const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, ownerAdmin: true, backupAccount: '', hookSecret: '', hooks: [], hooksError: null }
+const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, ownerAdmin: true, backupAccount: '', pollMinutes: 2, hookSecret: '', hooks: [], hooksError: null }
 
 type Participant = { memberId: number; name: string; whatsapp: string | null }
 type DiscRow = {
@@ -157,6 +158,7 @@ export class CurrentRmsPlugin {
   private refreshing: Promise<void> | null = null
   lastRefresh = 0
   lastPoll = 0
+  private pollStarted = Date.now()
   private rmsUsers = new Map<string, RmsUser>() // Current RMS users (membership type User) by member id
   private usersAt = 0
   private adminQueue = new Set<string>()
@@ -176,7 +178,18 @@ export class CurrentRmsPlugin {
       await this.save()
     }
     this.app.bus.on('event', (ev: WaEvent) => void this.onWhatsApp(ev).catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'WhatsApp → Current failed')))
-    setInterval(() => void this.poll().catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'poll failed')), POLL_MS).unref()
+    if (!POLL_CHOICES.includes(this.cfg.pollMinutes as 2)) this.cfg.pollMinutes = 2
+    // an old "connect first" error from pressing Register before connecting
+    if (!this.configured() && this.cfg.hooksError && !this.cfg.hooks.length) {
+      this.cfg.hooksError = null
+      await this.save()
+    }
+    // ticks every 30 s; polls when the chosen interval has passed
+    setInterval(() => {
+      if (Date.now() - this.pollStarted < this.cfg.pollMinutes * 60_000) return
+      this.pollStarted = Date.now()
+      void this.poll().catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'poll failed'))
+    }, 30_000).unref()
     setInterval(() => {
       if (this.configured()) void this.refresh().catch(() => undefined)
     }, LIST_REFRESH_MS).unref()
@@ -195,7 +208,7 @@ export class CurrentRmsPlugin {
     return { ...rest, apiKeySet: !!apiKey, hookUrl: hookSecret ? `/plugins/${PLUGIN_ID}/hook/${hookSecret}` : null }
   }
 
-  async updateConfig(p: Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback' | 'ownerAdmin' | 'backupAccount'>>): Promise<void> {
+  async updateConfig(p: Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback' | 'ownerAdmin' | 'backupAccount' | 'pollMinutes'>>): Promise<void> {
     const before = `${this.cfg.ownerAdmin}|${this.cfg.backupAccount}|${this.cfg.account}`
     if (p.subdomain !== undefined) this.cfg.subdomain = p.subdomain.trim().replace(/^https?:\/\//, '').replace(/\.current-rms\.com.*$/, '').toLowerCase()
     if (p.apiKey) this.cfg.apiKey = p.apiKey.trim()
@@ -205,6 +218,10 @@ export class CurrentRmsPlugin {
     if (p.inviteFallback !== undefined) this.cfg.inviteFallback = !!p.inviteFallback
     if (p.ownerAdmin !== undefined) this.cfg.ownerAdmin = !!p.ownerAdmin
     if (p.backupAccount !== undefined) this.cfg.backupAccount = p.backupAccount
+    if (p.pollMinutes !== undefined) {
+      if (!POLL_CHOICES.includes(p.pollMinutes as 2)) throw new AppError('CRMS_POLL', 'Choose 2, 5, 15 or 30 minutes', 400)
+      this.cfg.pollMinutes = p.pollMinutes
+    }
     await this.save()
     // new backup number or owner rule: bring the existing groups in line, one at a time
     if (before !== `${this.cfg.ownerAdmin}|${this.cfg.backupAccount}|${this.cfg.account}`) this.queueAdmins(await this.syncedIds())
@@ -931,6 +948,7 @@ export class CurrentRmsPlugin {
   }
 
   async registerHooks(publicUrl: string): Promise<void> {
+    if (!this.configured()) throw new AppError('CRMS_NOT_CONFIGURED', 'Connect Current RMS first (subdomain and API key)', 409)
     if (!/^https:\/\//.test(publicUrl)) {
       this.cfg.hooksError = 'NO_PUBLIC_URL'
       await this.save()
@@ -1061,6 +1079,7 @@ export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: C
           inviteFallback: z.boolean().optional(),
           ownerAdmin: z.boolean().optional(),
           backupAccount: z.string().max(64).optional(),
+          pollMinutes: z.union([z.literal(2), z.literal(5), z.literal(15), z.literal(30)]).optional(),
         }),
       },
     },
