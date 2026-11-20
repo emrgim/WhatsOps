@@ -201,3 +201,11 @@ ul.sent{margin:0;padding-left:18px}ul.sent li{margin:4px 0}
 
 #crmsPoll{margin-top:4px}
 .card div:has(> #crmsPoll){margin-top:16px}
+.crms-levels{margin:12px 0 4px}.crms-lv-wrap{overflow-x:auto}
+.crms-lv{border-collapse:collapse;margin:6px 0;width:auto}
+.crms-lv th,.crms-lv td{padding:5px 12px;text-align:center;border-bottom:1px solid var(--border);font-weight:400;font-size:12px}
+.crms-lv thead th{color:var(--muted);max-width:140px;vertical-align:bottom}
+.crms-lv tbody th{text-align:left;color:var(--fg);white-space:nowrap}
+.crms-lv input{margin:0;width:auto}
+.crms-rec-group{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
+.crms-nodisc{margin:2px 0 0 18px}

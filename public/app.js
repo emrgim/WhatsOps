@@ -414,6 +414,11 @@ const CRMS_HTML = (st) => {
       <label><input type="radio" name="mode" value="groups"><span>${esc(t('crms.mode.groups'))}</span></label>
       <label><input type="radio" name="mode" value="community"><span>${esc(t('crms.mode.community'))}</span></label></div>
       <p class="muted small" id="crmsModeHint"></p></div>
+    <div class="crms-levels"><span class="muted small">${esc(t('crms.levels'))}</span>
+      <div class="crms-lv-wrap"><table class="crms-lv"><thead><tr><th></th><th>${esc(t('crms.lv.objects'))}</th><th>${esc(t('crms.lv.discussions'))}</th><th>${esc(t('crms.lv.messages'))}</th></tr></thead>
+      <tbody>${CRMS_LV.map((ty) => `<tr><th>${esc(t('crms.types.' + ty))}</th>${['objects', 'discussions', 'messages'].map((k) => `<td><input type="checkbox" data-lv="${ty}" data-lk="${k}" aria-label="${esc(t('crms.types.' + ty) + ' · ' + t('crms.lv.' + k))}"></td>`).join('')}</tr>`).join('')}</tbody></table></div>
+      <p class="muted small">${esc(t('crms.lv.hint'))}</p>
+      <p class="muted small">${esc(t('crms.lv.cost'))}</p></div>
     <label class="inline"><input type="checkbox" name="ownerAdmin"> <span>${esc(t('crms.ownerAdmin'))}</span></label>
     <p class="muted small">${esc(t('crms.ownerAdminHint'))}</p>
     <label><span>${esc(t('crms.field'))}</span> <select name="whatsappField"></select></label>
@@ -461,6 +466,7 @@ async function crmsLoad(st) {
     }
     $$('input[name=mode]', f2).forEach((i) => { i.checked = i.value === (c.mode || 'groups') })
     crmsModeHint(c.mode)
+    $$('[data-lv]', f2).forEach((i) => { const l = c.levels?.[i.dataset.lv]; i.checked = l ? !!l[i.dataset.lk] : i.dataset.lk === 'messages' })
     f2.inviteFallback.checked = c.inviteFallback !== false
     f2.ownerAdmin.checked = c.ownerAdmin !== false
     f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + (c.whatsappField ? `<option value="${esc(c.whatsappField)}">${esc(c.whatsappField)}</option>` : '')
@@ -505,6 +511,8 @@ async function crmsUsers() {
   for (const u of list) { const sel = el.querySelector(`[data-uscope="${CSS.escape(u.id)}"]`); if (sel) sel.value = u.access?.scope || 'owned' }
 }
 const CRMS_TYPES = ['Opportunity', 'Project', 'Member', 'Invoice', 'Item', 'Product', 'Service', 'Activity', 'Quarantine', 'PurchaseOrder']
+const CRMS_LV = ['Opportunity', 'Project', 'Product', 'Service', 'Member', 'Invoice', 'Activity', 'Quarantine', 'PurchaseOrder']
+const crmsBadge = (s) => (s === 'on' ? 'open' : s === 'error' ? 'bad' : s === 'creating' || s === 'queued' ? 'warn' : '')
 async function crmsRefresh() {
   $('#crmsInfo').textContent = t('crms.reading')
   const s = await api('POST', CRMS + '/refresh')
@@ -524,19 +532,24 @@ async function crmsTree() {
   const tree = await api('GET', CRMS + '/discussions' + (q ? '?q=' + encodeURIComponent(q) : ''))
   const n = tree.reduce((a, g) => a + g.discussions.length, 0)
   const on = tree.reduce((a, g) => a + g.discussions.filter((d) => d.sync).length, 0)
-  $('#crmsInfo').textContent = t('crms.count', num(tree.length), num(n), num(on))
+  const recs = tree.filter((g) => g.group?.sync).length
+  $('#crmsInfo').textContent = t('crms.count', num(tree.length), num(n), num(on), num(recs))
   $('#crmsTree').innerHTML = tree.length ? tree.map((g) => `<div class="crms-rec">
-      <div class="crms-rec-head"><span class="badge">${esc(CRMS_TYPES.includes(g.type) ? t('crms.type.' + g.type) : g.type)}</span> <b>${esc(g.name)}</b>${g.owner ? ` <span class="muted small" title="${esc(t(g.owner.whatsapp ? 'crms.ownerOk' : 'crms.ownerNoPhone'))}">${esc(t('crms.owner', g.owner.name))}${g.owner.whatsapp ? ' ✓' : ''}</span>` : ''} <a class="small" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(t('crms.open'))} ↗</a></div>
+      <div class="crms-rec-head"><span class="badge">${esc(CRMS_TYPES.includes(g.type) ? t('crms.type.' + g.type) : g.type)}</span> <b>${esc(g.name)}</b>${g.owner ? ` <span class="muted small" title="${esc(t(g.owner.whatsapp ? 'crms.ownerOk' : 'crms.ownerNoPhone'))}">${esc(t('crms.owner', g.owner.name))}${g.owner.whatsapp ? ' ✓' : ''}</span>` : ''} <a class="small" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(t('crms.open'))} ↗</a>
+        <span class="crms-rec-group"><label class="switch" title="${esc(t('crms.recGroup'))}"><input type="checkbox" ${g.group?.sync ? 'checked' : ''} data-objsync="${esc(g.type)}" data-oid="${esc(g.id)}"><span></span></label> <span class="small">${esc(t('crms.recGroup'))}</span>${g.group ? ` <span class="badge ${crmsBadge(g.group.state)}">${esc(t(g.group.state === 'on' ? 'crms.state.group' : 'crms.state.' + (g.group.state || 'off')))}</span>` : ''}</span></div>
+      ${g.group?.error ? `<div class="small err-text">${esc(g.group.error)}</div>` : ''}
+      ${g.discussions.length ? '' : `<p class="muted small crms-nodisc">${esc(t('crms.noDisc'))}</p>`}
       ${g.discussions.map((d) => `<div class="crms-disc" data-disc="${esc(d.id)}">
-        <label class="switch" title="${esc(t('crms.syncToggle'))}"><input type="checkbox" ${d.sync ? 'checked' : ''} data-sync="${esc(d.id)}"><span></span></label>
+        <label class="switch" title="${esc(t('crms.syncToggle'))}"><input type="checkbox" ${d.sync ? 'checked' : ''} data-sync="${esc(d.id)}" data-msg="${d.messages ? 1 : 0}"><span></span></label>
         <div class="crms-disc-main"><div><b>${esc(d.subject || '#' + d.id)}</b></div>
           <div class="muted small">${esc(t('crms.people', d.participants.length, d.participants.filter((p) => p.whatsapp).length))}${d.replies != null ? ' · ' + esc(t('crms.replies', d.replies)) : ''}${d.lastAt ? ' · ' + esc(fmtDate(d.lastAt)) : ''}</div>
           ${d.participants.length ? `<div class="muted small">${d.participants.map((p) => esc(p.name) + (p.whatsapp ? ' ✓' : '')).join(', ')}</div>` : ''}
           ${d.error ? `<div class="small err-text">${esc(d.error)}</div>` : ''}</div>
-        <span class="badge ${d.state === 'on' ? 'open' : d.state === 'error' ? 'bad' : d.state === 'creating' ? 'warn' : ''}">${esc(t('crms.state.' + (d.state || 'off')))}</span>
+        <span class="badge ${crmsBadge(d.state)}">${esc(t(d.state === 'on' && !d.messages ? 'crms.state.onNoMsg' : 'crms.state.' + (d.state || 'off')))}</span>
       </div>`).join('')}</div>`).join('') : `<p class="muted">${esc(t(isUser() ? 'crms.noneMine' : 'crms.none'))}</p>`
   clearTimeout(crmsTimer)
-  if (tree.some((g) => g.discussions.some((d) => d.state === 'creating'))) crmsTimer = setTimeout(() => routeItem === 'currentrms' && crmsTree().catch(() => {}), 4000)
+  const busy = (s) => s === 'creating' || s === 'queued'
+  if (tree.some((g) => busy(g.group?.state) || g.discussions.some((d) => busy(d.state)))) crmsTimer = setTimeout(() => routeItem === 'currentrms' && crmsTree().catch(() => {}), 4000)
 }
 document.addEventListener('submit', run(async (e) => {
   if (e.target.id === 'crmsConn') {
@@ -554,6 +567,7 @@ document.addEventListener('submit', run(async (e) => {
     await api('PUT', CRMS + '/config', {
       ...(f.account ? { account: f.account.value, backupAccount: f.backupAccount.value } : {}),
       mode: f.querySelector('input[name=mode]:checked')?.value ?? 'groups', whatsappField: f.whatsappField.value, inviteFallback: f.inviteFallback.checked, ownerAdmin: f.ownerAdmin.checked,
+      levels: Object.fromEntries(CRMS_LV.map((ty) => [ty, Object.fromEntries(['objects', 'discussions', 'messages'].map((k) => [k, !!f.querySelector(`[data-lv="${ty}"][data-lk="${k}"]`)?.checked]))])),
     })
     toast(t('saved'))
   }
@@ -579,10 +593,18 @@ document.addEventListener('change', run(async (e) => {
     toast(t('saved'))
     return
   }
+  const ob = e.target.closest('[data-objsync]')
+  if (ob) {
+    const on = ob.checked
+    if (on && !confirm(t('crms.confirmObj'))) { ob.checked = false; return }
+    try { await api('PUT', `${CRMS}/records/${encodeURIComponent(ob.dataset.objsync)}/${encodeURIComponent(ob.dataset.oid)}`, { group: on }) } catch (x) { ob.checked = !on; throw x }
+    await crmsTree()
+    return
+  }
   const sw = e.target.closest('[data-sync]')
   if (!sw) return
   const on = sw.checked
-  if (on && !confirm(t('crms.confirmOn'))) { sw.checked = false; return }
+  if (on && !confirm(t(sw.dataset.msg === '0' ? 'crms.confirmOnNoMsg' : 'crms.confirmOn'))) { sw.checked = false; return }
   try { await api('PUT', `${CRMS}/discussions/${encodeURIComponent(sw.dataset.sync)}`, { sync: on }) } catch (x) { sw.checked = !on; throw x }
   await crmsTree()
 }))

@@ -9,6 +9,7 @@ import type { Principal } from '../security/auth.js'
 import { publicOrigin } from '../security/auth.js'
 import { localizeError, reqLang, tr, type Lang } from '../i18n.js'
 import { AppError } from '../util.js'
+import { LEVEL_TYPES } from '../plugins/currentrms.js'
 
 type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean }
 
@@ -126,11 +127,25 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   tool(
     'currentrms_set_sync',
     'Sync a Current RMS discussion',
-    'Turn the WhatsApp sync of a Current RMS discussion on or off. On: WhatsOps creates the WhatsApp group (or a group in the record\'s Community, per the plugin settings), adds the participants that have a WhatsApp number, posts the whole discussion and then mirrors new messages both ways. Confirm with the user first.',
+    'Turn the WhatsApp sync of a Current RMS discussion on or off. On: WhatsOps creates the WhatsApp group (or a group in the record\'s Community, per the plugin settings) and adds the participants that have a WhatsApp number; when the plugin mirrors messages for that kind of record, it also posts the whole discussion and then mirrors new messages both ways. Confirm with the user first.',
     'send',
     { discussion_id: z.string().describe(L('Discussion id (from currentrms_discussions)')), sync: z.boolean().describe(L('true = sync on, false = sync off')) },
     { openWorldHint: true },
     async (a) => app.plugins.currentrms.setSync(a.discussion_id, a.sync),
+  )
+
+  tool(
+    'currentrms_record_group',
+    'WhatsApp group of a Current RMS record',
+    'Create the WhatsApp group of a Current RMS record (e.g. an opportunity or a product), or stop managing it (the group stays on WhatsApp). The plugin\'s main number creates it, inside the record\'s Community when the plugin uses Communities; the record\'s owner and the backup number become admins. New records get their group by themselves when the plugin settings say so. Confirm with the user first.',
+    'send',
+    {
+      type: z.enum(LEVEL_TYPES).describe(L('Record type in Current RMS')),
+      record_id: z.string().max(40).describe(L('Record id in Current RMS (from currentrms_discussions)')),
+      group: z.boolean().describe(L('true = create the group, false = stop managing it')),
+    },
+    { openWorldHint: true },
+    async (a) => app.plugins.currentrms.setObjectGroup(a.type, a.record_id, a.group),
   )
 
   tool(

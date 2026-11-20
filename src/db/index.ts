@@ -117,7 +117,7 @@ export const TABLES: TableDef[] = [
     cols: [
       ['id', 'id', 'notnull'], ['subject', 'name'], ['object_type', 'short'], ['object_id', 'id'], ['object_name', 'name'], ['participants', 'long'],
       ['reply_count', 'int'], ['last_comment_id', 'big'], ['last_at', 'big'], ['sync', 'int'], ['state', 'short'], ['group_jid', 'key'], ['error', 'long'],
-      ['synced_comment_id', 'big'], ['created_at', 'big'], ['owner_member_id', 'id'], ['admins', 'long'],
+      ['synced_comment_id', 'big'], ['created_at', 'big'], ['owner_member_id', 'id'], ['admins', 'long'], ['auto_at', 'big'], ['rms_created_at', 'big'],
     ],
     pk: ['id'],
   },
@@ -140,7 +140,16 @@ export const TABLES: TableDef[] = [
     ],
     pk: ['member_id'],
   },
-  { name: 'crms_objects', cols: [['key', 'key', 'notnull'], ['community_jid', 'key'], ['name', 'name'], ['created_at', 'big']], pk: ['key'] },
+  // a record (opportunity, product…): its Community and its own group (level 1 of "what to sync")
+  {
+    name: 'crms_objects',
+    cols: [
+      ['key', 'key', 'notnull'], ['community_jid', 'key'], ['name', 'name'], ['created_at', 'big'], ['object_type', 'short'], ['object_id', 'id'],
+      ['group_jid', 'key'], ['sync', 'int'], ['state', 'short'], ['error', 'long'], ['owner_member_id', 'id'], ['admins', 'long'], ['participants', 'long'],
+      ['auto_at', 'big'], ['rms_created_at', 'big'],
+    ],
+    pk: ['key'],
+  },
   {
     name: 'crms_map',
     cols: [['discussion_id', 'id', 'notnull'], ['comment_id', 'id', 'notnull'], ['wa_id', 'id', 'notnull'], ['dir', 'short'], ['at', 'big']],

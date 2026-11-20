@@ -129,11 +129,20 @@ Links the discussions of [Current RMS](https://www.current-rms.com) (OnRent Even
 1. **Connection**: your subdomain (`yourcompany` from `yourcompany.current-rms.com`) and an API key (System Setup → Integrations → API). The key is stored on the server and never shown again.
 2. **Settings**:
    - **WhatsApp number** that owns the groups.
-   - **Structure on WhatsApp**: *Single groups* — one group per discussion, fully isolated, nobody sees the other discussions; or *Community per record* — one Community per record (opportunity, project, contact…) with a group per discussion: messages stay sealed in each group and new members need approval, but Community members can see the names of all its groups.
+   - **Structure on WhatsApp**: *Single groups* — separate groups (one per record, one per discussion), fully isolated, nobody sees the other discussions; or *Community per record* — one Community per record (opportunity, project, contact…) with the record group and a group per discussion: messages stay sealed in each group and new members need approval, but Community members can see the names of all its groups.
+   - **What to sync**, per kind of record (opportunities, projects, products, services, contacts, invoices, activities, quarantines, purchase orders), on three levels:
+
+     | Level | What happens | Calls to Current RMS |
+     |---|---|---|
+     | **Group for each new record** | a record is created (e.g. a new opportunity) → WhatsOps creates its WhatsApp group | 1 per kind at every check (webhooks: at once) + 2–3 per group |
+     | **Group for each new discussion** | a discussion is created on one of these records → a group for that discussion | 1 at every check for all kinds + 2–3 per group |
+     | **Messages** | comments ⇄ WhatsApp messages in the discussion groups, both ways; off = the groups are only for chatting | 1 per WhatsApp message + 1 every 100 groups at every check |
+
+     Only records and discussions created after a level is switched on get a group by themselves (existing ones: the switches in the list). Automatic groups are created one at a time, 45 s apart, at most 50 a day; a group switched off by hand is never switched on again by itself. Switching messages on later starts from the current comments: old ones are not posted.
    - **Contacts custom field** that holds the WhatsApp number: only participants with a number there are added.
    - People who can't be added (privacy settings) get the **invite link** privately (can be turned off).
-3. **Discussions**: listed by record, with participants and replies. Turning a discussion on creates the WhatsApp group (closed: only admins add people and change settings, approval on), adds the participants, posts the whole discussion grouped by day, then mirrors both ways: a new comment in Current RMS → a message in the group (`*Name*` + text); a message in the group → a comment in the discussion (as the matching contact when possible, otherwise `Name (WhatsApp): text`).
-4. **Instant updates**: turn webhooks on in Current RMS (System Setup → Company Information), then *Register webhooks*. WhatsOps must have a public HTTPS address (`WA_PUBLIC_URL`). Without webhooks, synced discussions are checked every 2 minutes.
+3. **Discussions**: listed by record, with participants and replies. Each record has a *Record group* switch (its own WhatsApp group). Turning a discussion on creates the WhatsApp group (closed: only admins add people and change settings, approval on) and adds the participants; when messages are synced for that kind of record it also posts the whole discussion grouped by day, then mirrors both ways: a new comment in Current RMS → a message in the group (`*Name*` + text); a message in the group → a comment in the discussion (as the matching contact when possible, otherwise `Name (WhatsApp): text`).
+4. **Instant updates**: turn webhooks on in Current RMS (System Setup → Company Information), then *Register webhooks*: WhatsOps registers only the events the chosen levels need (`<record>_create`, `<record>_discuss`, `discussion_comment`) and updates them when the levels change. WhatsOps must have a public HTTPS address (`WA_PUBLIC_URL`). Without webhooks, Current RMS is checked every 2, 5, 15 or 30 minutes.
 
 **Admins.** The main number (the default one unless chosen in the plugin) creates every group and Community, so it is their creator. Two more admins are added and promoted:
 - the **backup number** (another WhatsOps number): admin everywhere; while the main number is offline the sync goes on from the backup;
@@ -141,7 +150,7 @@ Links the discussions of [Current RMS](https://www.current-rms.com) (OnRent Even
 
 **Current RMS users** (plugin → Users): send each one their personal invite link (valid 14 days): they type their WhatsApp number, receive a code on WhatsApp and confirm. From the same list the owner decides who signs in to WhatsOps, and whether they see only the records they own or all, and whether they manage the plugin. A user limited to their own records sees only those discussions and can switch only their sync.
 
-Groups are created one at a time with a pause between them, so WhatsApp does not see a burst. API calls stay under Current RMS' limit of 60 per minute. The same is available from the API (`/v1/plugins/currentrms/…`) and MCP (`currentrms_discussions`, `currentrms_set_sync`).
+Groups are created one at a time with a pause between them, so WhatsApp does not see a burst. API calls stay under Current RMS' limit of 60 per minute. The same is available from the API (`/v1/plugins/currentrms/…`, levels in `PUT …/config` → `levels`, record groups in `PUT …/records/{type}/{id}`) and MCP (`currentrms_discussions`, `currentrms_set_sync`, `currentrms_record_group`).
 
 ## Configuration
 

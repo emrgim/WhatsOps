@@ -2,10 +2,15 @@
  * Plugin: Current RMS (OnRent Events) discussions ⇄ WhatsApp.
  *
  * Every discussion in Current RMS is attached to a record (opportunity, project, contact, invoice,
- * product, activity…). The plugin lists them grouped by record; a toggle per discussion turns the
- * sync on: WhatsOps creates a WhatsApp group (or a group inside a Community for the record — a
- * plugin setting), adds the discussion participants that have a WhatsApp number in the chosen
- * custom field, posts the whole discussion so far, then mirrors both ways:
+ * product, activity…). What is synced is chosen per record type, on three levels:
+ *   record      a WhatsApp group for every new record (e.g. a new opportunity)
+ *   discussion  a group for every new discussion on those records
+ *   messages    comments ⇄ WhatsApp messages in the discussion groups (off: groups only for chatting,
+ *               no Current RMS call per message)
+ * Existing records and discussions get a group from the switches in the list. A discussion group
+ * (or a group inside a Community for the record — a plugin setting) gets the discussion
+ * participants that have a WhatsApp number in the chosen custom field; with messages on, it gets
+ * the whole discussion so far, then mirrors both ways:
  *   Current → WhatsApp  new comment (webhook `discussion_comment`, or polling) → "*Name*\ntext"
  *   WhatsApp → Current  message in the group → comment (as the matching member when possible)
  * Loop guard: every mirrored item is recorded (comment id ⇄ WhatsApp message id) and skipped.
@@ -37,6 +42,54 @@ const LIST_REFRESH_MS = 30 * 60_000
 const GROUP_GAP_MS = 45_000 // never create WhatsApp groups in a burst
 const MAX_CHUNK = 3500
 
+// ------------------------------------------------------------------ what to sync (3 levels per record type)
+/** Record types the plugin can follow. Products and services are both "Item" in webhooks and discussions. */
+export const LEVEL_TYPES = ['Opportunity', 'Project', 'Product', 'Service', 'Member', 'Invoice', 'Activity', 'Quarantine', 'PurchaseOrder'] as const
+/**
+ * Per record type: objects = a WhatsApp group for every new record; discussions = a group for every new
+ * discussion on those records; messages = comments ⇄ WhatsApp messages in the discussion groups.
+ */
+export type Levels = { objects: boolean; discussions: boolean; messages: boolean }
+const HOOK_PREFIX: Record<string, string> = { Opportunity: 'opportunity', Project: 'project', Product: 'item', Service: 'item', Member: 'member', Invoice: 'invoice', Activity: 'activity', Quarantine: 'quarantine', PurchaseOrder: 'po' }
+const SLACK_MS = 2 * 60_000 // clock difference allowed between Current RMS and this computer
+const AUTO_DAY_MAX = 50 // automatic groups per 24 h at most: WhatsApp limits how many groups a number creates
+const AUTO_PER_CHECK = 25
+export const levelKey = (type: string): string => (type === 'Item' ? 'Product' : type)
+export const objKey = (type: string, id: string | number): string => `${levelKey(type)}:${id}`
+
+/** Levels for every record type: nothing is created by itself unless chosen; messages are mirrored unless switched off. */
+export function normLevels(input: unknown): Record<string, Levels> {
+  const src = (input && typeof input === 'object' ? input : {}) as Record<string, Partial<Levels> | undefined>
+  const out: Record<string, Levels> = {}
+  for (const t of LEVEL_TYPES) {
+    const l = src[t] ?? {}
+    out[t] = { objects: !!l.objects, discussions: !!l.discussions, messages: l.messages === undefined ? true : !!l.messages }
+  }
+  return out
+}
+
+/** The Current RMS webhook events the chosen levels need. */
+export function hookEvents(levels: Record<string, Levels>): string[] {
+  const ev = new Set<string>()
+  for (const t of LEVEL_TYPES) {
+    const l = levels[t]
+    if (!l) continue
+    if (l.messages) ev.add('discussion_comment')
+    if (l.discussions) ev.add(`${HOOK_PREFIX[t]}_discuss`)
+    if (l.objects) ev.add(`${HOOK_PREFIX[t]}_create`)
+  }
+  return [...ev].sort()
+}
+
+/** Records created since `since` that have not been handled yet, oldest first, at most `max`. */
+export function pickNew<T extends { id: string; createdAt: number }>(list: T[], since: number, seen: Set<string>, max: number): T[] {
+  return list
+    .filter((x) => !seen.has(x.id) && x.createdAt >= since)
+    .sort((a, b) => a.createdAt - b.createdAt || Number(a.id) - Number(b.id))
+    .slice(0, max)
+}
+const errText = (e: unknown) => (e instanceof AppError ? e.message : String((e as Error)?.message ?? e)).slice(0, 500)
+
 export type CrmsConfig = {
   subdomain: string
   apiKey: string
@@ -50,8 +103,13 @@ export type CrmsConfig = {
   hookSecret: string
   hooks: { id: number; event: string }[]
   hooksError: string | null
+  hookBase: string // public URL the webhooks were registered with: they follow the levels when these change
+  levels: Record<string, Levels>
+  since: Record<string, number> // 'obj:<Type>' / 'disc:<Type>' → when that level was turned on: only what is created after gets a group by itself
+  cursor: Record<string, number> // newest creation time already read ('obj:<Type>', 'disc')
 }
-const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, ownerAdmin: true, backupAccount: '', pollMinutes: 2, hookSecret: '', hooks: [], hooksError: null }
+const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, ownerAdmin: true, backupAccount: '', pollMinutes: 2, hookSecret: '', hooks: [], hooksError: null, hookBase: '', levels: normLevels({}), since: {}, cursor: {} }
+export type ConfigPatch = Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback' | 'ownerAdmin' | 'backupAccount' | 'pollMinutes'>> & { levels?: Record<string, Partial<Levels>> }
 
 type Participant = { memberId: number; name: string; whatsapp: string | null }
 type DiscRow = {
@@ -72,7 +130,29 @@ type DiscRow = {
   created_at: number | null
   owner_member_id: string | null
   admins: string | null
+  auto_at: number | null // set when the group is (to be) created by itself: never switched on again after a manual off
+  rms_created_at: number | null
 }
+/** A record (opportunity, product…): its Community and its own WhatsApp group. */
+type ObjRow = {
+  key: string
+  community_jid: string | null
+  name: string | null
+  created_at: number | null
+  object_type: string | null
+  object_id: string | null
+  group_jid: string | null
+  sync: number | null
+  state: string | null
+  error: string | null
+  owner_member_id: string | null
+  admins: string | null
+  participants: string | null
+  auto_at: number | null
+  rms_created_at: number | null
+}
+type RecInfo = { type: string; id: string; name: string; owner: string | null; createdAt: number; memberIds: number[]; membership?: string }
+type RawDisc = { id: number; subject?: string; discussable_type: string; discussable_id: number; reply_count?: number; last_comment_id?: number; updated_at?: string; created_at?: string; participants?: { member_id: number }[] }
 type CrmsUserRow = {
   member_id: string
   name: string | null
@@ -107,19 +187,18 @@ export function planAdmins(participants: { id: string; phoneNumber?: string; adm
 }
 
 /** Discussable types → API collection, name field, path in the web app, short label. */
-const TYPES: Record<string, { coll: string; name: string; web: string; short: string }> = {
-  Opportunity: { coll: 'opportunities', name: 'subject', web: 'opportunities', short: 'Opp.' },
-  Project: { coll: 'projects', name: 'name', web: 'projects', short: 'Prj.' },
-  Member: { coll: 'members', name: 'name', web: 'members', short: '' },
-  Invoice: { coll: 'invoices', name: 'subject', web: 'invoices', short: 'Inv.' },
-  Item: { coll: 'products', name: 'name', web: 'products', short: '' },
-  Product: { coll: 'products', name: 'name', web: 'products', short: '' },
-  Service: { coll: 'services', name: 'name', web: 'services', short: '' },
-  Activity: { coll: 'activities', name: 'subject', web: 'activities', short: 'Act.' },
-  Quarantine: { coll: 'quarantines', name: 'reference', web: 'quarantines', short: 'Qua.' },
-  PurchaseOrder: { coll: 'purchase_orders', name: 'subject', web: 'purchase_orders', short: 'PO' },
+const TYPES: Record<string, { coll: string; one: string; name: string; web: string; short: string }> = {
+  Opportunity: { coll: 'opportunities', one: 'opportunity', name: 'subject', web: 'opportunities', short: 'Opp.' },
+  Project: { coll: 'projects', one: 'project', name: 'name', web: 'projects', short: 'Prj.' },
+  Member: { coll: 'members', one: 'member', name: 'name', web: 'members', short: '' },
+  Invoice: { coll: 'invoices', one: 'invoice', name: 'subject', web: 'invoices', short: 'Inv.' },
+  Item: { coll: 'products', one: 'product', name: 'name', web: 'products', short: '' },
+  Product: { coll: 'products', one: 'product', name: 'name', web: 'products', short: '' },
+  Service: { coll: 'services', one: 'service', name: 'name', web: 'services', short: '' },
+  Activity: { coll: 'activities', one: 'activity', name: 'subject', web: 'activities', short: 'Act.' },
+  Quarantine: { coll: 'quarantines', one: 'quarantine', name: 'reference', web: 'quarantines', short: 'Qua.' },
+  PurchaseOrder: { coll: 'purchase_orders', one: 'purchase_order', name: 'subject', web: 'purchase_orders', short: 'PO' },
 }
-const HOOK_EVENTS = ['discussion_comment', 'opportunity_discuss', 'project_discuss', 'member_discuss', 'invoice_discuss', 'item_discuss', 'activity_discuss', 'quarantine_discuss', 'po_discuss']
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + '…' : s)
@@ -163,6 +242,9 @@ export class CurrentRmsPlugin {
   private usersAt = 0
   private adminQueue = new Set<string>()
   private adminRunning = false
+  private draining = false
+  private capLogged = 0
+  private groupGate: Promise<void> = Promise.resolve()
 
   constructor(private app: App) {}
 
@@ -179,6 +261,10 @@ export class CurrentRmsPlugin {
     }
     this.app.bus.on('event', (ev: WaEvent) => void this.onWhatsApp(ev).catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'WhatsApp → Current failed')))
     if (!POLL_CHOICES.includes(this.cfg.pollMinutes as 2)) this.cfg.pollMinutes = 2
+    this.cfg.levels = normLevels(this.cfg.levels)
+    this.cfg.since = { ...(this.cfg.since ?? {}) }
+    this.cfg.cursor = { ...(this.cfg.cursor ?? {}) }
+    this.cfg.hookBase ??= ''
     // an old "connect first" error from pressing Register before connecting
     if (!this.configured() && this.cfg.hooksError && !this.cfg.hooks.length) {
       this.cfg.hooksError = null
@@ -204,11 +290,16 @@ export class CurrentRmsPlugin {
   }
 
   publicConfig() {
-    const { apiKey, hookSecret, ...rest } = this.cfg
-    return { ...rest, apiKeySet: !!apiKey, hookUrl: hookSecret ? `/plugins/${PLUGIN_ID}/hook/${hookSecret}` : null }
+    const { apiKey, hookSecret, cursor: _c, ...rest } = this.cfg
+    return { ...rest, levelTypes: LEVEL_TYPES, apiKeySet: !!apiKey, hookUrl: hookSecret ? `/plugins/${PLUGIN_ID}/hook/${hookSecret}` : null }
   }
 
-  async updateConfig(p: Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback' | 'ownerAdmin' | 'backupAccount' | 'pollMinutes'>>): Promise<void> {
+  /** Are comments ⇄ WhatsApp messages mirrored for this kind of record? */
+  msgOn(type: string): boolean {
+    return this.cfg.levels[levelKey(type)]?.messages ?? true
+  }
+
+  async updateConfig(p: ConfigPatch): Promise<void> {
     const before = `${this.cfg.ownerAdmin}|${this.cfg.backupAccount}|${this.cfg.account}`
     if (p.subdomain !== undefined) this.cfg.subdomain = p.subdomain.trim().replace(/^https?:\/\//, '').replace(/\.current-rms\.com.*$/, '').toLowerCase()
     if (p.apiKey) this.cfg.apiKey = p.apiKey.trim()
@@ -222,7 +313,30 @@ export class CurrentRmsPlugin {
       if (!POLL_CHOICES.includes(p.pollMinutes as 2)) throw new AppError('CRMS_POLL', 'Choose 2, 5, 15 or 30 minutes', 400)
       this.cfg.pollMinutes = p.pollMinutes
     }
+    let msgTurnedOn: string[] = []
+    let hooksChanged = false
+    if (p.levels) {
+      const merged: Record<string, Partial<Levels>> = {}
+      for (const t of LEVEL_TYPES) merged[t] = { ...this.cfg.levels[t], ...(p.levels[t] ?? {}) }
+      const next = normLevels(merged)
+      for (const t of LEVEL_TYPES) {
+        for (const [k, sk] of [['objects', `obj:${t}`], ['discussions', `disc:${t}`]] as const) {
+          // only what is created from now on gets a group by itself
+          if (next[t][k] && !this.cfg.levels[t][k]) {
+            this.cfg.since[sk] = Date.now()
+            if (k === 'objects') delete this.cfg.cursor[sk]
+          }
+          if (!next[t][k]) delete this.cfg.since[sk]
+        }
+      }
+      msgTurnedOn = LEVEL_TYPES.filter((t) => next[t].messages && !this.cfg.levels[t].messages)
+      hooksChanged = hookEvents(next).join() !== hookEvents(this.cfg.levels).join()
+      this.cfg.levels = next
+    }
     await this.save()
+    // messages switched on: start from the comments there are now, never flood a group with the old ones
+    if (msgTurnedOn.length) await this.rebaseline(msgTurnedOn).catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'message sync start point not set'))
+    if (hooksChanged && this.cfg.hookBase && this.configured()) void this.registerHooks(this.cfg.hookBase).catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'webhooks not updated'))
     // new backup number or owner rule: bring the existing groups in line, one at a time
     if (before !== `${this.cfg.ownerAdmin}|${this.cfg.backupAccount}|${this.cfg.account}`) this.queueAdmins(await this.syncedIds())
   }
@@ -310,8 +424,7 @@ export class CurrentRmsPlugin {
   async refresh(): Promise<void> {
     this.refreshing ??= (async () => {
       try {
-        type D = { id: number; subject?: string; discussable_type: string; discussable_id: number; reply_count?: number; last_comment_id?: number; updated_at?: string; created_at?: string; participants?: { member_id: number }[] }
-        const list = await this.all<D>('/discussions', 'discussions')
+        const list = await this.all<RawDisc>('/discussions', 'discussions')
         // names of the records the discussions belong to
         const byType = new Map<string, Set<number>>()
         for (const d of list) {
@@ -338,17 +451,7 @@ export class CurrentRmsPlugin {
           }
         }
         // participants: names and WhatsApp numbers, 100 members per call
-        const memberIds = [...new Set(list.flatMap((d) => (d.participants ?? []).map((p) => p.member_id)).filter(Boolean))]
-        const members = new Map<number, Participant>()
-        for (let i = 0; i < memberIds.length; i += 100) {
-          const q = memberIds.slice(i, i + 100).map((id) => `q[id_in][]=${id}`).join('&')
-          try {
-            const rows = await this.all<{ id: number; name?: string; custom_fields?: Record<string, unknown> }>(`/members?${q}`, 'members', 1)
-            for (const m of rows) members.set(m.id, { memberId: m.id, name: m.name ?? '', whatsapp: this.waNumber(m.custom_fields) })
-          } catch (e) {
-            logger.debug({ mod: 'currentrms', err: String(e) }, 'participants not readable')
-          }
-        }
+        const members = await this.membersById(list.flatMap((d) => (d.participants ?? []).map((p) => p.member_id)))
         await this.loadUsers(true).catch((e) => logger.debug({ mod: 'currentrms', err: String(e) }, 'users not readable'))
         const have = new Map(((await this.app.h.db.selectFrom('crms_discussions').selectAll().execute()) as DiscRow[]).map((r) => [r.id, r]))
         const ownerChanged: string[] = []
@@ -367,6 +470,7 @@ export class CurrentRmsPlugin {
             last_comment_id: d.last_comment_id ?? null,
             last_at: Date.parse(d.updated_at ?? d.created_at ?? '') || null,
             owner_member_id: owners.get(`${d.discussable_type}:${d.discussable_id}`) ?? cur?.owner_member_id ?? null,
+            rms_created_at: Date.parse(d.created_at ?? '') || cur?.rms_created_at || null,
           }
           if (cur?.sync && cur.group_jid && row.owner_member_id !== cur.owner_member_id) ownerChanged.push(id)
           if (cur) await this.app.h.db.updateTable('crms_discussions').set(row).where('id', '=', id).execute()
@@ -374,6 +478,7 @@ export class CurrentRmsPlugin {
         }
         this.lastRefresh = Date.now()
         if (ownerChanged.length) this.queueAdmins(ownerChanged)
+        await this.handleNewDiscussions(list).catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'new discussions not handled'))
         logger.info({ mod: 'currentrms', discussions: list.length }, `discussions read from Current RMS: ${list.length}`)
       } finally {
         this.refreshing = null
@@ -385,18 +490,23 @@ export class CurrentRmsPlugin {
   /** Records → discussions, for the plugin page / API / MCP. */
   async tree(q?: string, scope: Scope = null) {
     const rows = (await this.app.h.db.selectFrom('crms_discussions').selectAll().execute()) as DiscRow[]
+    const objs = new Map(((await this.app.h.db.selectFrom('crms_objects').selectAll().execute()) as ObjRow[]).map((o) => [o.key, o]))
+    const groupOf = (o: ObjRow | undefined) => (o && (o.sync || o.group_jid || o.state === 'queued') ? { sync: !!o.sync, state: o.state ?? 'off', jid: o.group_jid, error: o.error } : null)
     const registered = new Set(((await this.app.h.db.selectFrom('crms_users').select(['member_id', 'phone', 'verified_at']).execute()) as CrmsUserRow[]).filter((u) => u.phone && u.verified_at).map((u) => u.member_id))
     const needle = (q ?? '').trim().toLowerCase()
-    type Rec = { type: string; id: string; name: string; url: string; owner: { id: string; name: string; whatsapp: boolean } | null; discussions: unknown[]; last: number }
+    type Rec = { type: string; id: string; name: string; url: string; owner: { id: string; name: string; whatsapp: boolean } | null; group: ReturnType<typeof groupOf>; discussions: unknown[]; last: number }
     const groups = new Map<string, Rec>()
+    const ownerOf = (id: string | null) => {
+      if (!id) return null
+      const ou = this.rmsUsers.get(id)
+      return { id, name: ou?.name || `#${id}`, whatsapp: registered.has(id) || !!ou?.whatsapp }
+    }
     for (const r of rows) {
       if (!this.inScope(r, scope)) continue
       const name = r.object_name || `${r.object_type} #${r.object_id}`
       if (needle && !`${name} ${r.subject ?? ''}`.toLowerCase().includes(needle)) continue
-      const k = `${r.object_type}:${r.object_id}`
-      const ou = r.owner_member_id ? this.rmsUsers.get(r.owner_member_id) : undefined
-      const owner = r.owner_member_id ? { id: r.owner_member_id, name: ou?.name || `#${r.owner_member_id}`, whatsapp: registered.has(r.owner_member_id) || !!ou?.whatsapp } : null
-      if (!groups.has(k)) groups.set(k, { type: r.object_type, id: r.object_id, name, url: this.webUrl(r.object_type, r.object_id), owner, discussions: [], last: 0 })
+      const k = objKey(r.object_type, r.object_id)
+      if (!groups.has(k)) groups.set(k, { type: r.object_type, id: r.object_id, name, url: this.webUrl(r.object_type, r.object_id), owner: ownerOf(r.owner_member_id), group: groupOf(objs.get(k)), discussions: [], last: 0 })
       const g = groups.get(k)!
       const parts = JSON.parse(r.participants || '[]') as Participant[]
       g.discussions.push({
@@ -409,8 +519,16 @@ export class CurrentRmsPlugin {
         state: r.state ?? 'off',
         group: r.group_jid,
         error: r.error,
+        messages: this.msgOn(r.object_type),
       })
       g.last = Math.max(g.last, r.last_at ?? 0)
+    }
+    // records with their own group and no discussion yet (e.g. a new opportunity)
+    for (const [k, o] of objs) {
+      if (groups.has(k) || !o.object_type || !o.object_id || !groupOf(o) || !this.inScope(o, scope)) continue
+      const name = o.name || `${o.object_type} #${o.object_id}`
+      if (needle && !name.toLowerCase().includes(needle)) continue
+      groups.set(k, { type: o.object_type, id: o.object_id, name, url: this.webUrl(o.object_type, o.object_id), owner: ownerOf(o.owner_member_id), group: groupOf(o), discussions: [], last: o.rms_created_at ?? o.created_at ?? 0 })
     }
     return [...groups.values()].sort((a, b) => b.last - a.last).map(({ last: _l, ...g }) => g)
   }
@@ -473,14 +591,17 @@ export class CurrentRmsPlugin {
     return { member: src.startsWith(`${PLUGIN_ID}:`) ? src.slice(PLUGIN_ID.length + 1) : null }
   }
 
-  private inScope(r: DiscRow, scope: Scope): boolean {
+  private inScope(r: { owner_member_id: string | null }, scope: Scope): boolean {
     return !scope || (!!scope.member && r.owner_member_id === scope.member)
   }
 
+  /** Groups WhatsOps manages: discussion ids, and 'obj:<key>' for the groups of records. */
   private async syncedIds(ownerMemberId?: string): Promise<string[]> {
     let q = this.app.h.db.selectFrom('crms_discussions').select('id').where('sync', '=', 1).where('group_jid', 'is not', null)
     if (ownerMemberId) q = q.where('owner_member_id', '=', ownerMemberId)
-    return ((await q.execute()) as { id: string }[]).map((r) => r.id)
+    let q2 = this.app.h.db.selectFrom('crms_objects').select('key').where('sync', '=', 1).where('group_jid', 'is not', null)
+    if (ownerMemberId) q2 = q2.where('owner_member_id', '=', ownerMemberId)
+    return [...((await q.execute()) as { id: string }[]).map((r) => r.id), ...((await q2.execute()) as { key: string }[]).map((o) => `obj:${o.key}`)]
   }
 
   private async row(id: string): Promise<DiscRow> {
@@ -523,18 +644,23 @@ export class CurrentRmsPlugin {
   /** Participants of a discussion with their WhatsApp number (custom field on the member). */
   private async participants(discussionId: string): Promise<Participant[]> {
     const d = await this.api<{ discussion: { participants?: { member_id: number; member?: { name?: string } }[] } }>('GET', `/discussions/${discussionId}`)
-    const out: Participant[] = []
-    for (const p of d.discussion.participants ?? []) {
-      let name = p.member?.name ?? ''
-      let whatsapp: string | null = null
+    const list = d.discussion.participants ?? []
+    const members = await this.membersById(list.map((p) => p.member_id))
+    return list.map((p) => members.get(p.member_id) ?? { memberId: p.member_id, name: p.member?.name ?? '', whatsapp: null })
+  }
+
+  /** Names and WhatsApp numbers of contacts, 100 per call. */
+  private async membersById(ids: number[]): Promise<Map<number, Participant>> {
+    const out = new Map<number, Participant>()
+    const uniq = [...new Set(ids.map(Number).filter(Boolean))]
+    for (let i = 0; i < uniq.length; i += 100) {
+      const q = uniq.slice(i, i + 100).map((id) => `q[id_in][]=${id}`).join('&')
       try {
-        const m = await this.api<{ member: { name?: string; custom_fields?: Record<string, unknown> } }>('GET', `/members/${p.member_id}`)
-        name = m.member.name ?? name
-        whatsapp = this.waNumber(m.member.custom_fields)
-      } catch {
-        /* member not readable: keep the name we have */
+        const rows = await this.all<{ id: number; name?: string; custom_fields?: Record<string, unknown> }>(`/members?${q}`, 'members', 1)
+        for (const m of rows) out.set(m.id, { memberId: m.id, name: m.name ?? '', whatsapp: this.waNumber(m.custom_fields) })
+      } catch (e) {
+        logger.debug({ mod: 'currentrms', err: String(e) }, 'participants not readable')
       }
-      out.push({ memberId: p.member_id, name, whatsapp })
     }
     return out
   }
@@ -552,10 +678,22 @@ export class CurrentRmsPlugin {
     return clip(`${t?.short ? t.short + ' ' : ''}${obj} · ${subject}`, 100)
   }
 
-  private async paceGroups(): Promise<void> {
-    const wait = this.lastGroupAt + GROUP_GAP_MS - Date.now()
-    if (wait > 0) await sleep(wait)
-    this.lastGroupAt = Date.now()
+  private paceGroups(): Promise<void> {
+    const turn = this.groupGate.then(async () => {
+      const wait = this.lastGroupAt + GROUP_GAP_MS - Date.now()
+      if (wait > 0) await sleep(wait)
+      this.lastGroupAt = Date.now()
+    })
+    this.groupGate = turn.catch(() => undefined)
+    return turn
+  }
+
+  /** Sealed: only admins add people or change the group, new members need approval. */
+  private async sealGroup(sock: ReturnType<WaAccount['requireOpen']>, group: string, description: string): Promise<void> {
+    await sock.groupUpdateDescription(group, description).catch(() => undefined)
+    await sock.groupMemberAddMode(group, 'admin_add').catch(() => undefined)
+    await sock.groupJoinApprovalMode(group, 'on').catch(() => undefined)
+    await sock.groupSettingUpdate(group, 'locked').catch(() => undefined)
   }
 
   private async activate(id: string): Promise<void> {
@@ -573,31 +711,28 @@ export class CurrentRmsPlugin {
       const description = `${r.object_name ?? r.object_type} — ${this.webUrl(r.object_type, r.object_id)}\nCurrent RMS ⇄ WhatsApp (WhatsOps)`
       let meta: { id: string } | null
       if (this.cfg.mode === 'community') {
-        const community = await this.communityFor(r)
+        const community = await this.communityFor(r.object_type, r.object_id, r.object_name)
         meta = await sock.communityCreateGroup(this.groupSubject(r, true), [], community)
       } else {
         meta = await sock.groupCreate(this.groupSubject(r, false), [])
       }
       if (!meta?.id) throw new AppError('CRMS_GROUP', 'WhatsApp did not create the group', 502)
       group = meta.id
-      await this.setRow(id, { group_jid: group })
-      // sealed: only admins add people or change the group, new members need approval
-      await sock.groupUpdateDescription(group, description).catch(() => undefined)
-      await sock.groupMemberAddMode(group, 'admin_add').catch(() => undefined)
-      await sock.groupJoinApprovalMode(group, 'on').catch(() => undefined)
-      await sock.groupSettingUpdate(group, 'locked').catch(() => undefined)
+      await this.setRow(id, { group_jid: group, ...(r.auto_at ? { auto_at: now() } : {}) })
+      await this.sealGroup(sock, group, description)
       logger.info({ mod: 'currentrms', discussion: id, mode: this.cfg.mode }, `WhatsApp group created for discussion ${id}`)
     }
     // participants (people who can't be added get the invite link privately)
     if (jids.length) {
       const res = await sock.groupParticipantsUpdate(group, jids, 'add').catch(() => [] as { status: string; jid?: string }[])
       const refused = res.filter((x) => x.status === '403' || x.status === '408').map((x) => x.jid).filter(Boolean) as string[]
-      await this.sendInvites(acc, group, r, refused)
+      await this.sendInvites(acc, group, r.subject || r.object_name || '', refused)
     }
     // the record's owner and the backup number become admins
     await this.ensureAdminsNow(id).catch((e) => logger.warn({ mod: 'currentrms', discussion: id, err: String((e as Error)?.message ?? e) }, 'group admins not set'))
-    // the whole discussion so far, grouped by day, in few messages
-    if (!r.synced_comment_id) {
+    // the whole discussion so far, grouped by day, in few messages — only when messages are mirrored
+    if (r.synced_comment_id == null && !this.msgOn(r.object_type)) await this.setRow(id, { synced_comment_id: r.last_comment_id ?? 0 })
+    else if (r.synced_comment_id == null) {
       const list = await this.comments(id)
       if (list.length) {
         for (const chunk of this.historyChunks(list, r)) {
@@ -611,33 +746,344 @@ export class CurrentRmsPlugin {
     this.lastPoll = 0
   }
 
-  private async communityFor(r: DiscRow): Promise<string> {
-    const k = `${r.object_type}:${r.object_id}`
-    const have = (await this.app.h.db.selectFrom('crms_objects').selectAll().where('key', '=', k).executeTakeFirst()) as { community_jid: string } | undefined
-    if (have?.community_jid) return have.community_jid
-    const sock = this.mainAcc().requireOpen()
-    await this.paceGroups()
-    const name = clip(`${TYPES[r.object_type]?.short ? TYPES[r.object_type].short + ' ' : ''}${r.object_name || '#' + r.object_id}`, 100)
-    const meta = await sock.communityCreate(name, `${this.webUrl(r.object_type, r.object_id)}\nCurrent RMS ⇄ WhatsApp (WhatsOps)`)
-    if (!meta?.id) throw new AppError('CRMS_GROUP', 'WhatsApp did not create the community', 502)
-    await sock.communityJoinApprovalMode(meta.id, 'on').catch(() => undefined)
-    await sock.communityMemberAddMode(meta.id, 'admin_add').catch(() => undefined)
-    await this.app.h.db.insertInto('crms_objects').values({ key: k, community_jid: meta.id, name, created_at: now() }).execute()
-    logger.info({ mod: 'currentrms', object: k }, 'WhatsApp community created')
-    return meta.id
+  /** The record's Community (created once, by the main number). */
+  private communityFor(type: string, id: string, objName: string | null): Promise<string> {
+    const k = objKey(type, id)
+    return this.lock(`community:${k}`, async () => {
+      const have = await this.obj(k)
+      if (have?.community_jid) return have.community_jid
+      const sock = this.mainAcc().requireOpen()
+      await this.paceGroups()
+      const name = clip(`${TYPES[type]?.short ? TYPES[type].short + ' ' : ''}${objName || '#' + id}`, 100)
+      const meta = await sock.communityCreate(name, `${this.webUrl(type, id)}\nCurrent RMS ⇄ WhatsApp (WhatsOps)`)
+      if (!meta?.id) throw new AppError('CRMS_GROUP', 'WhatsApp did not create the community', 502)
+      await sock.communityJoinApprovalMode(meta.id, 'on').catch(() => undefined)
+      await sock.communityMemberAddMode(meta.id, 'admin_add').catch(() => undefined)
+      await this.upsertObj(k, { community_jid: meta.id, ...(have ? {} : { name: objName, object_type: levelKey(type), object_id: id }) })
+      logger.info({ mod: 'currentrms', object: k }, 'WhatsApp community created')
+      return meta.id
+    })
   }
 
-  private async communityJidOf(r: DiscRow): Promise<string | null> {
-    const have = (await this.app.h.db.selectFrom('crms_objects').select('community_jid').where('key', '=', `${r.object_type}:${r.object_id}`).executeTakeFirst()) as { community_jid: string | null } | undefined
-    return have?.community_jid ?? null
+  private async communityJidOf(type: string, id: string): Promise<string | null> {
+    return (await this.obj(objKey(type, id)))?.community_jid ?? null
   }
 
   /** Invite link, privately, to people WhatsApp did not let us add (their privacy settings). */
-  private async sendInvites(acc: WaAccount, group: string, r: DiscRow, jids: string[]): Promise<void> {
+  private async sendInvites(acc: WaAccount, group: string, title: string, jids: string[]): Promise<void> {
     if (!jids.length || !this.cfg.inviteFallback) return
     const code = await acc.requireOpen().groupInviteCode(group).catch(() => null)
     if (!code) return
-    for (const j of jids) await acc.sendRaw(j, { text: `${(r.subject || r.object_name || '').trim()}\nhttps://chat.whatsapp.com/${code}` }).catch(() => undefined)
+    for (const j of jids) await acc.sendRaw(j, { text: `${title.trim()}\nhttps://chat.whatsapp.com/${code}` }).catch(() => undefined)
+  }
+
+  // ------------------------------------------------------------------ records (level 1) and new discussions (level 2)
+  private async obj(key: string): Promise<ObjRow | undefined> {
+    return (await this.app.h.db.selectFrom('crms_objects').selectAll().where('key', '=', key).executeTakeFirst()) as ObjRow | undefined
+  }
+
+  private async upsertObj(key: string, set: Partial<ObjRow>): Promise<void> {
+    if (await this.obj(key)) await this.app.h.db.updateTable('crms_objects').set(set).where('key', '=', key).execute()
+    else await this.app.h.db.insertInto('crms_objects').values({ key, created_at: now(), ...set }).execute()
+  }
+
+  private recInfo(type: string, o: Record<string, unknown>): RecInfo {
+    const t = TYPES[type]
+    const parts = (Array.isArray(o.participants) ? o.participants : []) as { member_id?: number }[]
+    return {
+      type: levelKey(type),
+      id: String(o.id),
+      name: String(o[t?.name ?? 'name'] ?? o.name ?? o.subject ?? `#${o.id}`),
+      owner: o.owned_by != null && o.owned_by !== '' ? String(o.owned_by) : null,
+      createdAt: Date.parse(String(o.created_at ?? '')) || 0,
+      memberIds: parts.map((p) => Number(p.member_id)).filter(Boolean),
+      membership: typeof o.membership_type === 'string' ? o.membership_type : undefined,
+    }
+  }
+
+  private async readObject(type: string, id: string): Promise<RecInfo> {
+    const t = TYPES[type]
+    if (!t) throw new AppError('CRMS_TYPE', 'Unknown record type {0}', 400, [type])
+    const j = await this.api<Record<string, unknown>>('GET', `/${t.coll}/${encodeURIComponent(id)}`)
+    const o = (j[t.one] ?? Object.values(j).find((v) => v && typeof v === 'object' && !Array.isArray(v))) as Record<string, unknown> | undefined
+    if (!o) throw new AppError('CRMS_NO_RECORD', 'Record {0} {1} not found', 404, [type, id])
+    return this.recInfo(type, o)
+  }
+
+  /** Create the WhatsApp group of a record by hand (or stop managing it: the group stays on WhatsApp). */
+  async setObjectGroup(typeIn: string, id: string, on: boolean, scope: Scope = null): Promise<unknown> {
+    const t = levelKey(typeIn)
+    if (!TYPES[t]) throw new AppError('CRMS_TYPE', 'Unknown record type {0}', 400, [typeIn])
+    const key = objKey(t, id)
+    const have = await this.obj(key)
+    if (!on) {
+      if (have && !this.inScope(have, scope)) throw new AppError('CRMS_NOT_YOURS_REC', 'You can only manage the records you own', 403)
+      if (have) await this.upsertObj(key, { sync: 0, state: have.group_jid ? 'paused' : 'off' })
+      logger.info({ mod: 'currentrms', object: key }, 'record group off')
+      return { type: t, id, group: false, state: have?.group_jid ? 'paused' : 'off' }
+    }
+    const info = await this.readObject(t, id)
+    if (!this.inScope({ owner_member_id: info.owner }, scope)) throw new AppError('CRMS_NOT_YOURS_REC', 'You can only manage the records you own', 403)
+    // fail fast when WhatsApp is not connected (new groups are created only by the main number)
+    if (have?.group_jid) this.activeAcc()
+    else this.mainAcc().requireOpen()
+    const state = have?.group_jid ? 'on' : 'creating'
+    await this.upsertObj(key, { object_type: t, object_id: id, name: info.name, owner_member_id: info.owner, participants: JSON.stringify(info.memberIds.map((m) => ({ memberId: m, name: '', whatsapp: null }))), rms_created_at: info.createdAt || null, sync: 1, state, error: null })
+    void this.lock(`obj:${key}`, () => this.activateObj(key)).catch(async (e) => {
+      logger.error({ mod: 'currentrms', object: key, err: errText(e) }, 'record group not created')
+      await this.upsertObj(key, { state: 'error', error: errText(e) })
+    })
+    return { type: t, id, group: true, state }
+  }
+
+  private async activateObj(key: string): Promise<void> {
+    const o = await this.obj(key)
+    if (!o?.sync || !o.object_type || !o.object_id) return
+    const acc = o.group_jid ? this.activeAcc() : this.mainAcc()
+    const sock = acc.requireOpen()
+    const me = userOf(acc.row.me_jid ?? '')
+    const ids = (JSON.parse(o.participants || '[]') as Participant[]).map((p) => p.memberId)
+    const members = await this.membersById(ids)
+    const parts = ids.map((m) => members.get(m) ?? { memberId: m, name: '', whatsapp: null })
+    if (parts.length) await this.upsertObj(key, { participants: JSON.stringify(parts) })
+    const jids = [...new Set(parts.filter((p) => p.whatsapp && p.whatsapp !== me).map((p) => toJid(p.whatsapp!)))]
+    const name = (o.name || `#${o.object_id}`).trim()
+    let group = o.group_jid
+    if (!group) {
+      await this.paceGroups()
+      let meta: { id: string } | null
+      if (this.cfg.mode === 'community') {
+        const community = await this.communityFor(o.object_type, o.object_id, o.name)
+        meta = await sock.communityCreateGroup(clip(name, 100), [], community)
+      } else {
+        const short = TYPES[o.object_type]?.short
+        meta = await sock.groupCreate(clip(`${short ? short + ' ' : ''}${name}`, 100), [])
+      }
+      if (!meta?.id) throw new AppError('CRMS_GROUP', 'WhatsApp did not create the group', 502)
+      group = meta.id
+      await this.upsertObj(key, { group_jid: group, ...(o.auto_at ? { auto_at: now() } : {}) })
+      await this.sealGroup(sock, group, `${name} — ${this.webUrl(o.object_type, o.object_id)}\nCurrent RMS · WhatsOps`)
+      logger.info({ mod: 'currentrms', object: key, mode: this.cfg.mode }, `WhatsApp group created for ${key}`)
+    }
+    if (jids.length) {
+      const res = await sock.groupParticipantsUpdate(group, jids, 'add').catch(() => [] as { status: string; jid?: string }[])
+      await this.sendInvites(acc, group, name, res.filter((x) => x.status === '403' || x.status === '408').map((x) => x.jid).filter(Boolean) as string[])
+    }
+    await this.ensureAdminsNow(`obj:${key}`).catch((e) => logger.warn({ mod: 'currentrms', object: key, err: errText(e) }, 'group admins not set'))
+    await this.upsertObj(key, { state: 'on', error: null })
+  }
+
+  /** Records of this type created after their level was turned on: queued for a group. */
+  private async queueObjects(t: string, infos: RecInfo[], since: number): Promise<number> {
+    const rows = (await this.app.h.db.selectFrom('crms_objects').selectAll().where('object_type', '=', t).execute()) as ObjRow[]
+    const seen = new Set(rows.filter((r) => r.auto_at || r.sync || r.group_jid).map((r) => String(r.object_id)))
+    const fresh = pickNew(infos.filter((i) => !(t === 'Member' && i.membership === 'User')), since - SLACK_MS, seen, AUTO_PER_CHECK)
+    for (const i of fresh) {
+      await this.upsertObj(objKey(t, i.id), {
+        object_type: t,
+        object_id: i.id,
+        name: i.name,
+        owner_member_id: i.owner,
+        participants: JSON.stringify(i.memberIds.map((m) => ({ memberId: m, name: '', whatsapp: null }))),
+        rms_created_at: i.createdAt || null,
+        sync: 1,
+        state: 'queued',
+        error: null,
+        auto_at: now(),
+      })
+    }
+    if (fresh.length) {
+      logger.info({ mod: 'currentrms', type: t, n: fresh.length }, `${fresh.length} new ${t} record(s): group queued`)
+      this.drainQueue()
+    }
+    return fresh.length
+  }
+
+  /** Level 1 without webhooks: one call per record type that has it on. */
+  private async checkNewObjects(): Promise<void> {
+    for (const t of LEVEL_TYPES) {
+      const since = this.cfg.since[`obj:${t}`]
+      if (!since || !this.cfg.levels[t]?.objects) continue
+      const T = TYPES[t]
+      const from = Math.max(since, this.cfg.cursor[`obj:${t}`] ?? 0) - SLACK_MS
+      let list: Record<string, unknown>[]
+      try {
+        const j = await this.api<Record<string, unknown>>('GET', `/${T.coll}?q[created_at_gteq]=${encodeURIComponent(new Date(from).toISOString())}&q[s]=created_at%20desc&per_page=100`)
+        list = (j[T.coll] as Record<string, unknown>[]) ?? []
+      } catch (e) {
+        logger.warn({ mod: 'currentrms', type: t, err: errText(e) }, 'new records not readable')
+        continue
+      }
+      const infos = list.map((o) => this.recInfo(t, o))
+      await this.queueObjects(t, infos, since)
+      const newest = Math.max(0, ...infos.map((i) => i.createdAt))
+      if (newest > (this.cfg.cursor[`obj:${t}`] ?? 0)) {
+        this.cfg.cursor[`obj:${t}`] = newest
+        await this.save()
+      }
+    }
+  }
+
+  /** Discussions created after their level was turned on: queued for a group. Never again after a manual off. */
+  private async handleNewDiscussions(list: RawDisc[]): Promise<number> {
+    let n = 0
+    for (const d of list) {
+      const lk = levelKey(d.discussable_type)
+      const since = this.cfg.since[`disc:${lk}`]
+      if (!since || !this.cfg.levels[lk]?.discussions) continue
+      const created = Date.parse(d.created_at ?? '') || 0
+      if (created < since - SLACK_MS) continue
+      const id = String(d.id)
+      const r = (await this.app.h.db.selectFrom('crms_discussions').selectAll().where('id', '=', id).executeTakeFirst()) as DiscRow | undefined
+      if (r && (r.auto_at || r.sync || r.group_jid)) continue
+      if (!r) {
+        let info: RecInfo | null = null
+        try {
+          info = await this.readObject(d.discussable_type, String(d.discussable_id))
+        } catch {
+          /* the record name arrives with the next refresh */
+        }
+        await this.app.h.db
+          .insertInto('crms_discussions')
+          .values({ id, subject: d.subject ?? null, object_type: d.discussable_type, object_id: String(d.discussable_id), object_name: info?.name ?? null, participants: '[]', reply_count: d.reply_count ?? null, last_comment_id: d.last_comment_id ?? null, last_at: Date.parse(d.updated_at ?? d.created_at ?? '') || null, sync: 0, state: 'off', group_jid: null, error: null, synced_comment_id: null, created_at: now(), owner_member_id: info?.owner ?? null, rms_created_at: created || null })
+          .execute()
+      }
+      await this.setRow(id, { sync: 1, state: 'queued', error: null, auto_at: now() })
+      n++
+    }
+    if (n) {
+      logger.info({ mod: 'currentrms', n }, `${n} new discussion(s): group queued`)
+      this.drainQueue()
+    }
+    return n
+  }
+
+  /** Level 2 without webhooks: one call for all record types. */
+  private async checkNewDiscussions(): Promise<void> {
+    const on = LEVEL_TYPES.filter((t) => this.cfg.levels[t]?.discussions && this.cfg.since[`disc:${t}`])
+    if (!on.length) return
+    const from = Math.max(Math.min(...on.map((t) => this.cfg.since[`disc:${t}`])), this.cfg.cursor.disc ?? 0) - SLACK_MS
+    const j = await this.api<{ discussions?: RawDisc[] }>('GET', `/discussions?q[created_at_gteq]=${encodeURIComponent(new Date(from).toISOString())}&q[s]=created_at%20desc&per_page=100`)
+    const list = j.discussions ?? []
+    await this.handleNewDiscussions(list)
+    const newest = Math.max(0, ...list.map((d) => Date.parse(d.created_at ?? '') || 0))
+    if (newest > (this.cfg.cursor.disc ?? 0)) {
+      this.cfg.cursor.disc = newest
+      await this.save()
+    }
+  }
+
+  private async onNewObject(subjectType: string, id: string): Promise<void> {
+    const types = (subjectType === 'Item' ? ['Product', 'Service'] : [levelKey(subjectType)]).filter((t) => this.cfg.levels[t]?.objects && this.cfg.since[`obj:${t}`])
+    for (const t of types) {
+      let info: RecInfo
+      try {
+        info = await this.readObject(t, id)
+      } catch {
+        continue // e.g. an Item that is a service, not a product
+      }
+      if (await this.queueObjects(t, [info], this.cfg.since[`obj:${t}`])) return
+    }
+  }
+
+  private async onNewDiscussion(id: string): Promise<void> {
+    const j = await this.api<{ discussion?: RawDisc }>('GET', `/discussions/${encodeURIComponent(id)}`)
+    const d = j.discussion
+    if (!d) return
+    await this.handleNewDiscussions([d])
+    // not to be synced by itself: still listed
+    const have = await this.app.h.db.selectFrom('crms_discussions').select('id').where('id', '=', String(d.id)).executeTakeFirst()
+    if (!have)
+      await this.app.h.db
+        .insertInto('crms_discussions')
+        .values({ id: String(d.id), subject: d.subject ?? null, object_type: d.discussable_type, object_id: String(d.discussable_id), object_name: null, participants: '[]', reply_count: d.reply_count ?? null, last_comment_id: d.last_comment_id ?? null, last_at: Date.parse(d.updated_at ?? d.created_at ?? '') || null, sync: 0, state: 'off', group_jid: null, error: null, synced_comment_id: null, created_at: now(), rms_created_at: Date.parse(d.created_at ?? '') || null })
+        .execute()
+  }
+
+  /** Automatic groups created in the last 24 hours. */
+  private async autoToday(): Promise<number> {
+    const t = now() - 86400_000
+    const a = await this.app.h.db.selectFrom('crms_objects').select('key').where('auto_at', '>', t).where('group_jid', 'is not', null).execute()
+    const b = await this.app.h.db.selectFrom('crms_discussions').select('id').where('auto_at', '>', t).where('group_jid', 'is not', null).execute()
+    return a.length + b.length
+  }
+
+  /** Create the queued groups one at a time (records first, then discussions), 45 s apart, at most 50 a day. */
+  private drainQueue(): void {
+    if (this.draining) return
+    this.draining = true
+    void (async () => {
+      try {
+        for (;;) {
+          try {
+            if (this.mainAcc().state !== 'open') break
+          } catch {
+            break
+          }
+          if ((await this.autoToday()) >= AUTO_DAY_MAX) {
+            if (Date.now() - this.capLogged > 3600_000) logger.warn({ mod: 'currentrms', max: AUTO_DAY_MAX }, 'daily limit of automatic WhatsApp groups reached: the rest waits')
+            this.capLogged = Date.now()
+            break
+          }
+          const o = (await this.app.h.db.selectFrom('crms_objects').selectAll().where('state', '=', 'queued').where('sync', '=', 1).orderBy('auto_at').limit(1).executeTakeFirst()) as ObjRow | undefined
+          if (o) {
+            await this.upsertObj(o.key, { state: 'creating' })
+            await this.lock(`obj:${o.key}`, () => this.activateObj(o.key)).catch(async (e) => {
+              logger.error({ mod: 'currentrms', object: o.key, err: errText(e) }, 'record group not created')
+              await this.upsertObj(o.key, { state: 'error', error: errText(e) })
+            })
+            continue
+          }
+          const d = (await this.app.h.db.selectFrom('crms_discussions').selectAll().where('state', '=', 'queued').where('sync', '=', 1).orderBy('auto_at').limit(1).executeTakeFirst()) as DiscRow | undefined
+          if (!d) break
+          await this.setRow(d.id, { state: 'creating' })
+          await this.lock(d.id, () => this.activate(d.id)).catch(async (e) => {
+            logger.error({ mod: 'currentrms', discussion: d.id, err: errText(e) }, 'could not start the sync')
+            await this.setRow(d.id, { state: 'error', error: errText(e) })
+          })
+        }
+      } finally {
+        this.draining = false
+      }
+    })()
+  }
+
+  /** Last comment id of each discussion: 100 discussions per call (single reads for what the list misses, a few per check). */
+  private async lastComments(ids: string[]): Promise<Map<string, number>> {
+    const out = new Map<string, number>()
+    const want = new Set(ids)
+    for (let i = 0; i < ids.length; i += 100) {
+      const q = ids.slice(i, i + 100).map((id) => `q[id_in][]=${encodeURIComponent(id)}`).join('&')
+      try {
+        const j = await this.api<{ discussions?: { id: number; last_comment_id?: number }[] }>('GET', `/discussions?${q}&per_page=100`)
+        for (const d of j.discussions ?? []) if (want.has(String(d.id))) out.set(String(d.id), d.last_comment_id ?? 0)
+      } catch (e) {
+        logger.debug({ mod: 'currentrms', err: errText(e) }, 'discussions not readable in bulk')
+      }
+    }
+    const missing = ids.filter((id) => !out.has(id))
+    const start = missing.length ? Math.floor(Math.random() * missing.length) : 0
+    for (let k = 0; k < Math.min(25, missing.length); k++) {
+      const id = missing[(start + k) % missing.length]
+      try {
+        const d = await this.api<{ discussion: { last_comment_id?: number } }>('GET', `/discussions/${encodeURIComponent(id)}`)
+        out.set(id, d.discussion.last_comment_id ?? 0)
+      } catch {
+        /* next check */
+      }
+    }
+    return out
+  }
+
+  /** Messages switched on for these record types: the existing groups start from the current comments. */
+  private async rebaseline(types: string[]): Promise<void> {
+    const rows = ((await this.app.h.db.selectFrom('crms_discussions').selectAll().where('sync', '=', 1).where('group_jid', 'is not', null).execute()) as DiscRow[]).filter((r) => types.includes(levelKey(r.object_type)))
+    if (!rows.length) return
+    const last = await this.lastComments(rows.map((r) => r.id))
+    for (const r of rows) {
+      const l = last.get(r.id)
+      if (l != null && l > (r.synced_comment_id ?? 0)) await this.setRow(r.id, { synced_comment_id: l, last_comment_id: l })
+    }
   }
 
   /**
@@ -646,8 +1092,16 @@ export class CurrentRmsPlugin {
    * stays its creator. Missing people are added first; nobody is ever demoted.
    */
   private async ensureAdminsNow(id: string): Promise<void> {
-    const r = await this.row(id)
-    if (!r.sync || !r.group_jid) return
+    let r: { group_jid: string; owner_member_id: string | null; object_type: string; object_id: string; title: string; save: (admins: string) => Promise<void> }
+    if (id.startsWith('obj:')) {
+      const o = await this.obj(id.slice(4))
+      if (!o?.sync || !o.group_jid || !o.object_type || !o.object_id) return
+      r = { group_jid: o.group_jid, owner_member_id: o.owner_member_id, object_type: o.object_type, object_id: o.object_id, title: o.name || '', save: (a) => this.upsertObj(id.slice(4), { admins: a }) }
+    } else {
+      const d = await this.row(id)
+      if (!d.sync || !d.group_jid) return
+      r = { group_jid: d.group_jid, owner_member_id: d.owner_member_id, object_type: d.object_type, object_id: d.object_id, title: d.subject || d.object_name || '', save: (a) => this.setRow(id, { admins: a }) }
+    }
     const acc = this.activeAcc()
     const sock = acc.requireOpen()
     const me = CurrentRmsPlugin.phoneOf(acc)
@@ -668,10 +1122,10 @@ export class CurrentRmsPlugin {
       if (plan.add.length) {
         const res = await sock.groupParticipantsUpdate(r.group_jid, plan.add.map((p) => toJid(p)), 'add').catch(() => [] as { status: string; jid?: string }[])
         for (const x of res) if ((x.status === '200' || x.status === '409') && x.jid) promote.push(x.jid)
-        await this.sendInvites(acc, r.group_jid, r, res.filter((x) => x.status === '403' || x.status === '408').map((x) => x.jid).filter(Boolean) as string[])
+        await this.sendInvites(acc, r.group_jid, r.title, res.filter((x) => x.status === '403' || x.status === '408').map((x) => x.jid).filter(Boolean) as string[])
       }
       if (promote.length) await sock.groupParticipantsUpdate(r.group_jid, promote, 'promote')
-      const community = this.cfg.mode === 'community' ? await this.communityJidOf(r) : null
+      const community = this.cfg.mode === 'community' ? await this.communityJidOf(r.object_type, r.object_id) : null
       if (community) {
         const c = await sock.groupMetadata(community)
         const cp = planAdmins(c.participants, phones)
@@ -679,7 +1133,7 @@ export class CurrentRmsPlugin {
         if (cpromote.length) await sock.communityParticipantsUpdate(community, cpromote, 'promote').catch((e) => logger.debug({ mod: 'currentrms', err: String(e) }, 'community admins not set yet'))
       }
     }
-    await this.setRow(id, { admins: JSON.stringify([...want].map(([phone, role]) => ({ phone, role }))) })
+    await r.save(JSON.stringify([...want].map(([phone, role]) => ({ phone, role }))))
   }
 
   /** Bring groups in line in the background, one at a time, with a pause between them. */
@@ -895,7 +1349,7 @@ export class CurrentRmsPlugin {
   async pull(id: string): Promise<number> {
     return this.lock(id, async () => {
       const r = await this.row(id)
-      if (!r.sync || !r.group_jid || r.synced_comment_id == null) return 0
+      if (!r.sync || !r.group_jid || r.synced_comment_id == null || !this.msgOn(r.object_type)) return 0
       const acc = this.activeAcc()
       const list = (await this.comments(id)).filter((c) => c.id > (r.synced_comment_id ?? 0))
       let n = 0
@@ -911,21 +1365,28 @@ export class CurrentRmsPlugin {
     })
   }
 
-  /** Fallback when webhooks don't reach us: check the synced discussions every 2 minutes. */
+  /**
+   * Every N minutes (the webhooks bring the same at once): new records and new discussions of the
+   * types that want a group (one call per type, one for the discussions), then new comments of the
+   * discussion groups that mirror messages (one call per 100 groups).
+   */
   async poll(): Promise<void> {
     if (!this.configured()) return
-    const rows = (await this.app.h.db.selectFrom('crms_discussions').selectAll().where('sync', '=', 1).execute()) as DiscRow[]
-    for (const r of rows.slice(0, 25)) {
-      if (r.state === 'creating') continue
-      if (r.state === 'error' && !r.group_jid) {
-        void this.lock(r.id, () => this.activate(r.id)).catch(() => undefined)
-        continue
-      }
-      try {
-        const d = await this.api<{ discussion: { last_comment_id?: number } }>('GET', `/discussions/${r.id}`)
-        if ((d.discussion.last_comment_id ?? 0) > (r.synced_comment_id ?? 0)) await this.pull(r.id)
-      } catch (e) {
-        logger.debug({ mod: 'currentrms', discussion: r.id, err: String(e) }, 'poll failed')
+    await this.checkNewObjects().catch((e) => logger.warn({ mod: 'currentrms', err: errText(e) }, 'new records not checked'))
+    await this.checkNewDiscussions().catch((e) => logger.warn({ mod: 'currentrms', err: errText(e) }, 'new discussions not checked'))
+    this.drainQueue()
+    // groups that failed before they existed (e.g. WhatsApp was offline): a few per check
+    const failed = (await this.app.h.db.selectFrom('crms_discussions').selectAll().where('sync', '=', 1).where('state', '=', 'error').where('group_jid', 'is', null).limit(5).execute()) as DiscRow[]
+    for (const r of failed) void this.lock(r.id, () => this.activate(r.id)).catch(() => undefined)
+    const failedObj = (await this.app.h.db.selectFrom('crms_objects').selectAll().where('sync', '=', 1).where('state', '=', 'error').where('group_jid', 'is', null).limit(5).execute()) as ObjRow[]
+    for (const o of failedObj) void this.lock(`obj:${o.key}`, () => this.activateObj(o.key)).catch(() => undefined)
+    // new comments: only the discussion groups whose record type mirrors messages
+    const rows = ((await this.app.h.db.selectFrom('crms_discussions').selectAll().where('sync', '=', 1).where('state', '=', 'on').where('group_jid', 'is not', null).execute()) as DiscRow[]).filter((r) => this.msgOn(r.object_type))
+    if (rows.length) {
+      const last = await this.lastComments(rows.map((r) => r.id))
+      for (const r of rows) {
+        if ((last.get(r.id) ?? 0) <= (r.synced_comment_id ?? 0)) continue
+        await this.pull(r.id).catch((e) => logger.debug({ mod: 'currentrms', discussion: r.id, err: errText(e) }, 'poll failed'))
       }
     }
     this.lastPoll = Date.now()
@@ -937,14 +1398,19 @@ export class CurrentRmsPlugin {
     if (!a) return
     const subjectType = String(a.subject_type ?? '')
     const sourceType = String(a.source_type ?? '')
+    const actionType = String(a.action_type ?? '')
     if (subjectType === 'Discussion') {
       const id = String(a.subject_id)
       const r = (await this.app.h.db.selectFrom('crms_discussions').selectAll().where('id', '=', id).executeTakeFirst()) as DiscRow | undefined
-      if (r?.sync) await this.pull(id)
-      else if (!r) void this.refresh().catch(() => undefined)
+      if (r?.sync && this.msgOn(r.object_type)) await this.pull(id)
+      else if (!r) await this.onNewDiscussion(id)
       return
     }
-    if (sourceType === 'Discussion' || String(a.action_type ?? '') === 'discuss') void this.refresh().catch(() => undefined)
+    // a new record (level 1)
+    if (actionType === 'create') return this.onNewObject(subjectType, String(a.subject_id ?? ''))
+    // a new discussion on a record (level 2)
+    if (sourceType === 'Discussion' && a.source_id != null) return this.onNewDiscussion(String(a.source_id))
+    if (actionType === 'discuss') await this.checkNewDiscussions()
   }
 
   async registerHooks(publicUrl: string): Promise<void> {
@@ -956,9 +1422,11 @@ export class CurrentRmsPlugin {
     }
     for (const h of this.cfg.hooks) await this.api('DELETE', `/webhooks/${h.id}`).catch(() => undefined)
     this.cfg.hooks = []
-    const target = `${publicUrl.replace(/\/+$/, '')}/plugins/${PLUGIN_ID}/hook/${this.cfg.hookSecret}`
+    this.cfg.hookBase = publicUrl.replace(/\/+$/, '')
+    const target = `${this.cfg.hookBase}/plugins/${PLUGIN_ID}/hook/${this.cfg.hookSecret}`
     const errors: string[] = []
-    for (const event of HOOK_EVENTS) {
+    // only the events the chosen levels need
+    for (const event of hookEvents(this.cfg.levels)) {
       try {
         const w = await this.api<{ webhook: { id: number } }>('POST', '/webhooks', { webhook: { name: `WhatsOps ${event}`, event, target_url: target, active: true } })
         this.cfg.hooks.push({ id: w.webhook.id, event })
@@ -966,7 +1434,7 @@ export class CurrentRmsPlugin {
         errors.push(`${event}: ${e instanceof Error ? e.message : String(e)}`)
       }
     }
-    this.cfg.hooksError = this.cfg.hooks.some((h) => h.event === 'discussion_comment') ? null : errors[0] ?? 'webhooks not created'
+    this.cfg.hooksError = errors[0] ?? null
     await this.save()
     logger.info({ mod: 'currentrms', hooks: this.cfg.hooks.length, error: this.cfg.hooksError }, 'Current RMS webhooks registered')
   }
@@ -989,7 +1457,7 @@ export class CurrentRmsPlugin {
     if (!m?.chat?.endsWith('@g.us') || m.upsertType === 'append') return
     if (this.ownSent.has(m.id)) return
     const r = (await this.app.h.db.selectFrom('crms_discussions').selectAll().where('group_jid', '=', m.chat).executeTakeFirst()) as DiscRow | undefined
-    if (!r?.sync) return
+    if (!r?.sync || !this.msgOn(r.object_type)) return
     if (await this.mapped('wa_id', m.id)) return
     const text = (m.text ?? '').trim() || (m.hasMedia ? `[${m.type.replace(/Message$/, '')}]` : '')
     if (!text) return
@@ -1080,6 +1548,7 @@ export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: C
           ownerAdmin: z.boolean().optional(),
           backupAccount: z.string().max(64).optional(),
           pollMinutes: z.union([z.literal(2), z.literal(5), z.literal(15), z.literal(30)]).optional(),
+          levels: z.record(z.string(), z.object({ objects: z.boolean().optional(), discussions: z.boolean().optional(), messages: z.boolean().optional() })).optional(),
         }),
       },
     },
@@ -1112,6 +1581,14 @@ export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: C
       schema: { ...T, summary: 'Current RMS: turn the WhatsApp sync of a discussion on or off', params: z.object({ id: z.string() }), body: z.object({ sync: z.boolean() }) },
     },
     async (req) => plugin.setSync(req.params.id, req.body.sync, plugin.scopeOf(P(req))),
+  )
+  f.put(
+    `/v1/plugins/${PLUGIN_ID}/records/:type/:id`,
+    {
+      preHandler: access('sync'),
+      schema: { ...T, summary: 'Current RMS: create the WhatsApp group of a record, or stop managing it', params: z.object({ type: z.string().max(40), id: z.string().max(40) }), body: z.object({ group: z.boolean() }) },
+    },
+    async (req) => plugin.setObjectGroup(req.params.type, req.params.id, req.body.group, plugin.scopeOf(P(req))),
   )
 
   // ---- Current RMS users: their WhatsApp number (invite link) and their access to WhatsOps

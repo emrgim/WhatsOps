@@ -24,7 +24,7 @@ import { AppError } from './util.js'
 
 export const UPDATE_REPO = process.env.WA_UPDATE_REPO || process.env.WA_FEEDBACK_REPO || 'emrgim/WhatsOps'
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const INTERVAL_MIN = Math.max(1, Number(process.env.WA_UPDATE_INTERVAL_MIN || 5))
+const INTERVAL_MIN = Math.min(24 * 60, Math.max(1, Number(process.env.WA_UPDATE_INTERVAL_MIN || 5) || 5)) // setInterval overflows past ~24 days
 const HEALTHY_AFTER_MS = 120_000
 /** Set by the package launchers: <data>/runtime with `current`, `previous` and one folder per version. */
 const RUNTIME_DIR = process.env.WA_RUNTIME_DIR || ''

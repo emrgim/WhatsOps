@@ -326,7 +326,7 @@ const IT: Record<string, string> = {
   'List the discussions of Current RMS (OnRent Events) grouped by the record they belong to (opportunity, project, contact, invoice…), with whether each one is synced with a WhatsApp group.': 'Elenca le discussioni di Current RMS (OnRent Events) raggruppate per il record a cui appartengono (opportunità, progetto, contatto, fattura…), con lo stato di sincronizzazione con un gruppo WhatsApp.',
   'Filter by record name or discussion subject': 'Filtra per nome del record o oggetto della discussione',
   'Sync a Current RMS discussion': 'Sincronizza una discussione Current RMS',
-  'Turn the WhatsApp sync of a Current RMS discussion on or off. On: WhatsOps creates the WhatsApp group (or a group in the record\'s Community, per the plugin settings), adds the participants that have a WhatsApp number, posts the whole discussion and then mirrors new messages both ways. Confirm with the user first.': 'Accende o spegne la sincronizzazione WhatsApp di una discussione Current RMS. Accesa: WhatsOps crea il gruppo WhatsApp (o un gruppo nella Community del record, secondo le impostazioni del plugin), aggiunge i partecipanti che hanno un numero WhatsApp, pubblica tutta la discussione e poi riporta i nuovi messaggi nei due sensi. Chiedi prima conferma all\'utente.',
+  'Turn the WhatsApp sync of a Current RMS discussion on or off. On: WhatsOps creates the WhatsApp group (or a group in the record\'s Community, per the plugin settings) and adds the participants that have a WhatsApp number; when the plugin mirrors messages for that kind of record, it also posts the whole discussion and then mirrors new messages both ways. Confirm with the user first.': 'Accende o spegne la sincronizzazione WhatsApp di una discussione Current RMS. Accesa: WhatsOps crea il gruppo WhatsApp (o un gruppo nella Community del record, secondo le impostazioni del plugin) e aggiunge i partecipanti che hanno un numero WhatsApp; se il plugin sincronizza i messaggi per quel tipo di record, pubblica anche tutta la discussione e poi riporta i nuovi messaggi nei due sensi. Chiedi prima conferma all\'utente.',
   'Discussion id (from currentrms_discussions)': 'Id della discussione (da currentrms_discussions)',
   'true = sync on, false = sync off': 'true = sincronizzazione accesa, false = spenta',
   'Connect Current RMS first (subdomain and API key)': 'Collega prima Current RMS (sottodominio e chiave API)',
@@ -363,6 +363,14 @@ const IT: Record<string, string> = {
   'Current RMS user id (from currentrms_users)': 'Id utente Current RMS (da currentrms_users)',
   'Choose 2, 5, 15 or 30 minutes': 'Scegli 2, 5, 15 o 30 minuti',
   'Version {0} for this system is not published yet: trying again later': 'La versione {0} per questo sistema non è ancora pubblicata: riprovo più tardi',
+  'Unknown record type {0}': 'Tipo di record sconosciuto: {0}',
+  'Record {0} {1} not found': 'Record {0} {1} non trovato',
+  'You can only manage the records you own': 'Puoi gestire solo i record di cui sei proprietario',
+  'WhatsApp group of a Current RMS record': 'Gruppo WhatsApp di un record Current RMS',
+  'Create the WhatsApp group of a Current RMS record (e.g. an opportunity or a product), or stop managing it (the group stays on WhatsApp). The plugin\'s main number creates it, inside the record\'s Community when the plugin uses Communities; the record\'s owner and the backup number become admins. New records get their group by themselves when the plugin settings say so. Confirm with the user first.': 'Crea il gruppo WhatsApp di un record Current RMS (es. un\'opportunità o un prodotto), oppure smette di gestirlo (il gruppo resta su WhatsApp). Lo crea il numero principale del plugin, dentro la Community del record se il plugin usa le Community; il proprietario del record e il numero di backup diventano amministratori. I nuovi record ricevono il gruppo da soli se le impostazioni del plugin lo prevedono. Chiedi prima conferma all\'utente.',
+  'Record type in Current RMS': 'Tipo di record in Current RMS',
+  'Record id in Current RMS (from currentrms_discussions)': 'Id del record in Current RMS (da currentrms_discussions)',
+  'true = create the group, false = stop managing it': 'true = crea il gruppo, false = smetti di gestirlo',
 }
 
 /** All translatable keys (used by tests to make sure Italian covers every English string). */
