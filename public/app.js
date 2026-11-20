@@ -395,42 +395,69 @@ function renderVocab() {
 }
 $('#apiFilter').addEventListener('input', () => vocab && renderVocab())
 
-// ---------------------------------------------------------------- service log
+// ---------------------------------------------------------------- service log (terminal)
 const LEVEL_NAME = { 10: 'TRACE', 20: 'DEBUG', 30: 'INFO', 40: 'WARN', 50: 'ERROR', 60: 'FATAL' }
 const LEVEL_MIN = { all: 0, info: 30, warn: 40, error: 50 }
+const TERM_MAX = 2000
 let logES = null
-let logShown = 0
-function logTime(t) {
+let logLive = true
+let logEntries = []
+let logPending = 0
+const pad2 = (n) => String(n).padStart(2, '0')
+function termTime(t) {
   const d = new Date(t)
-  const today = d.toDateString() === new Date().toDateString()
-  return today ? d.toLocaleTimeString(LOCALE, { hour12: false }) : d.toLocaleString(LOCALE, { dateStyle: 'short', timeStyle: 'medium', hour12: false })
+  const hms = `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`
+  return d.toDateString() === new Date().toDateString() ? hms : `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())} ${hms}`
 }
-function logSummary(data) {
+function termKv(data) {
   if (!data) return ''
-  return Object.entries(data).map(([k, v]) => `${k}=${typeof v === 'string' ? v.split('\n')[0] : JSON.stringify(v)}`).join(' ').slice(0, 220)
+  return Object.entries(data).map(([k, v]) => {
+    const s = typeof v === 'string' ? v.split('\n')[0] : JSON.stringify(v)
+    return `<span class="tk">${esc(k)}</span>=<span class="tv">${esc(s.length > 160 ? s.slice(0, 160) + '…' : s)}</span>`
+  }).join(' ')
 }
-function logRow(e) {
-  const lvl = LEVEL_NAME[e.level] ?? e.level
-  const head = `<span class="lt">${esc(logTime(e.t))}</span><span class="ll">${esc(lvl)}</span><span class="lm">${esc(e.mod ?? '')}</span><span class="lx">${esc(e.msg)}${e.data ? ` <span class="ld">${esc(logSummary(e.data))}</span>` : ''}</span>`
-  const cls = `lg lvl-${Math.min(60, Math.floor(e.level / 10) * 10)}`
-  return e.data ? `<details class="${cls}"><summary>${head}</summary><pre>${esc(JSON.stringify(e.data, null, 2))}</pre></details>` : `<div class="${cls}"><div class="row">${head}</div></div>`
+function termLine(e, idx) {
+  const lv = Math.min(60, Math.floor(e.level / 10) * 10)
+  const name = String(LEVEL_NAME[e.level] ?? e.level).padEnd(5)
+  const mod = (e.mod ?? '').padEnd(7)
+  return `<div class="tl lv-${lv}${e.data ? ' has' : ''}" data-i="${idx}"><span class="tt">${esc(termTime(e.t))}</span> <span class="tlv">${esc(name)}</span> <span class="tm">${esc(mod)}</span> <span class="tx">${esc(e.msg)}</span>${e.data ? ' ' + termKv(e.data) : ''}</div>`
 }
 function logMatches(e) {
   if (e.level < LEVEL_MIN[$('#logLevel').value]) return false
   const q = $('#logQ').value.trim().toLowerCase()
   return !q || `${e.mod ?? ''} ${e.msg} ${e.data ? JSON.stringify(e.data) : ''}`.toLowerCase().includes(q)
 }
-function logCount() { $('#logCount').textContent = logShown ? t('log.count', num(logShown)) : t('log.empty') }
+const termEl = () => $('#logList')
+const termAtBottom = () => { const el = termEl(); return el.scrollHeight - el.scrollTop - el.clientHeight < 30 }
+function termToBottom() { const el = termEl(); el.scrollTop = el.scrollHeight; logPending = 0; $('#logJump').hidden = true }
+function termCount() { $('#logCount').textContent = logEntries.length ? t('log.count', num(logEntries.length)) : t('log.empty') }
+function termRender() {
+  termEl().innerHTML = logEntries.map(termLine).join('')
+  termCount()
+  termToBottom()
+}
+function termAppend(e) {
+  const stick = termAtBottom()
+  logEntries.push(e)
+  termEl().insertAdjacentHTML('beforeend', termLine(e, logEntries.length - 1))
+  if (logEntries.length > TERM_MAX) {
+    // drop the oldest lines; re-render keeps data-i indexes consistent
+    logEntries = logEntries.slice(-TERM_MAX)
+    termEl().innerHTML = logEntries.map(termLine).join('')
+  }
+  termCount()
+  if (stick) termToBottom()
+  else { logPending++; $('#logJump').hidden = false; $('#logJump').textContent = t('log.jump', logPending) }
+}
 async function loadLogs() {
+  $('#termHost').textContent = location.host
   const qs = new URLSearchParams({ level: $('#logLevel').value, limit: '1000' })
   const q = $('#logQ').value.trim()
   if (q) qs.set('q', q)
   const r = await api('GET', '/v1/admin/logs?' + qs)
-  const rows = r.entries.slice().reverse()
-  logShown = rows.length
-  $('#logList').innerHTML = rows.map(logRow).join('')
-  logCount()
-  if ($('#logLive').checked) startLogLive(); else stopLogLive()
+  logEntries = r.entries
+  termRender()
+  if (logLive) startLogLive(); else stopLogLive()
 }
 function startLogLive() {
   if (logES) return
@@ -438,19 +465,33 @@ function startLogLive() {
   logES.onmessage = (m) => {
     let e
     try { e = JSON.parse(m.data) } catch { return }
-    if (!logMatches(e)) return
-    $('#logList').insertAdjacentHTML('afterbegin', logRow(e))
-    logShown++
-    const list = $('#logList')
-    while (list.children.length > 1000) list.lastElementChild.remove()
-    logCount()
+    if (logMatches(e)) termAppend(e)
   }
 }
 function stopLogLive() { if (logES) { logES.close(); logES = null } }
+function setLive(on) {
+  logLive = on
+  $('#logLive').classList.toggle('on', on)
+  $('#term').classList.toggle('live', on)
+  if (on) { startLogLive(); termToBottom() } else stopLogLive()
+}
+termEl().addEventListener('click', (ev) => {
+  const line = ev.target.closest('.tl.has')
+  if (!line || window.getSelection()?.toString()) return
+  const next = line.nextElementSibling
+  if (next && next.classList.contains('tdet')) { next.remove(); line.classList.remove('open'); return }
+  const e = logEntries[Number(line.dataset.i)]
+  if (!e) return
+  line.insertAdjacentHTML('afterend', `<pre class="tdet">${esc(JSON.stringify(e.data, null, 2))}</pre>`)
+  line.classList.add('open')
+})
+termEl().addEventListener('scroll', () => { if (termAtBottom()) { logPending = 0; $('#logJump').hidden = true } })
+$('#logJump').addEventListener('click', termToBottom)
 let logQTimer = null
 $('#logLevel').addEventListener('change', run(loadLogs))
 $('#logQ').addEventListener('input', () => { clearTimeout(logQTimer); logQTimer = setTimeout(run(loadLogs), 300) })
-$('#logLive').addEventListener('change', (e) => (e.target.checked ? startLogLive() : stopLogLive()))
+$('#logLive').addEventListener('click', () => setLive(!logLive))
+$('#logClear').addEventListener('click', () => { logEntries = []; termRender() })
 
 // ---------------------------------------------------------------- settings
 async function loadSettings() {
