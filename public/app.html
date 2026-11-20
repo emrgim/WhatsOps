@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WhatsOps</title>
+<link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml">
+<link rel="icon" href="/favicon.ico?v=2" sizes="any">
+<link rel="apple-touch-icon" href="/favicon-192.png?v=2">
+<link id="omTheme" rel="stylesheet" href="/theme.css?v=13">
+<link rel="stylesheet" href="/static/base.css?v=13">
+<link rel="stylesheet" href="/static/app.css?v=13">
+<script src="/static/theme.js?v=13" defer></script>
+<script src="/static/i18n.js?v=13"></script>
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/favicon.svg?v=2" alt=""><div><b>WhatsOps</b><span id="host" class="muted"></span></div></div>
+  <nav id="tabs">
+    <button data-tab="numbers" class="on" data-i18n="nav.numbers"></button>
+    <button data-tab="connect" data-i18n="nav.connect"></button>
+    <button data-tab="settings" data-i18n="nav.settings"></button>
+  </nav>
+  <button id="logout" class="ghost small" data-i18n="logout"></button>
+  <div class="subbar"><div class="subnav" data-for="connect" hidden><button data-sub="mcp" class="on">MCP</button><button data-sub="api">API</button><button data-sub="hooks" data-i18n="nav.hooks"></button></div><div class="subnav" data-for="settings" hidden><button data-sub="general" class="on" data-i18n="sub.general"></button><button data-sub="db" data-i18n="nav.db"></button></div></div>
+</header>
+<main>
+  <section id="numbers" class="tab on">
+    <div class="head"><h2 data-i18n="numbers.title"></h2><button id="addNumber" data-i18n="numbers.add"></button></div>
+    <div id="accounts" class="grid"></div>
+  </section>
+
+  <section id="connect" class="tab">
+    <div class="sub on" id="connect-mcp">
+    <p class="muted"><span data-i18n="connect.endpoint"></span> <code id="mcpUrl"></code> <button class="ghost small" data-copy-el="mcpUrl" data-i18n="copy"></button></p>
+    <div class="grid two" id="clients"></div>
+    <h3 data-i18n="connect.grants"></h3>
+    <div id="grants"></div>
+    <h3 data-i18n="connect.sessions"></h3>
+    <div id="sessions"></div>
+    </div>
+    <div class="sub" id="connect-api">
+    <p class="muted"><span data-i18n="api.base"></span> <code id="apiBase"></code> <button class="ghost small" data-copy-el="apiBase" data-i18n="copy"></button></p>
+    <h3 data-i18n="keys.title"></h3>
+    <p class="muted" data-i18n-html="keys.hint"></p>
+    <form id="keyForm" class="card form">
+      <label><span data-i18n="keys.name"></span> <input name="name" required data-i18n-ph="keys.namePh"></label>
+      <div class="checks"><label><input type="checkbox" name="read" checked> <span data-i18n="keys.read"></span></label><label><input type="checkbox" name="send" checked> <span data-i18n="keys.send"></span></label><label><input type="checkbox" name="admin"> <span data-i18n="keys.admin"></span></label></div>
+      <label><span data-i18n="keys.numbers"></span> <select name="accounts" multiple size="3"></select><span class="muted" data-i18n="keys.numbersHint"></span></label>
+      <button type="submit" data-i18n="keys.create"></button>
+    </form>
+    <div id="newKey" class="card reveal" hidden></div>
+    <div id="keyList"></div>
+    <div class="head vhead"><h3 data-i18n="api.vocab"></h3><span><span id="apiCount" class="muted small"></span> <a href="/docs" target="_blank" rel="noopener" class="small" data-i18n="api.full"></a></span></div>
+    <input id="apiFilter" type="search" data-i18n-ph="api.filter">
+    <div id="apiVocab" class="grid two vocab"></div>
+    </div>
+    <div class="sub" id="connect-hooks">
+    <p class="muted"><span data-i18n="hooks.hint"></span> <code>X-WA-Signature: sha256=HMAC(secret, X-WA-Timestamp + "." + body)</code></p>
+    <form id="hookForm" class="card form">
+      <label><span data-i18n="hooks.url"></span> <input name="url" type="url" required placeholder="https://n8n.example.com/webhook/…"></label>
+      <div class="row"><label><span data-i18n="hooks.events"></span> <input name="events" value="message.received"></label><label><span data-i18n="hooks.number"></span> <select name="account"></select></label></div>
+      <span class="muted" data-i18n="hooks.eventsHint"></span>
+      <button type="submit" data-i18n="hooks.add"></button>
+    </form>
+    <div id="newHook" class="card reveal" hidden></div>
+    <div id="hookList"></div>
+    <h3 data-i18n="hooks.deliveries"></h3>
+    <div id="deliveries"></div>
+    </div>
+  </section>
+
+  <section id="settings" class="tab">
+    <div class="sub on" id="settings-general">
+    <div class="card form" id="appearCard">
+      <h3 data-i18n="appear.title"></h3>
+      <div class="seg" role="radiogroup">
+        <label><input type="radio" name="appearance" value="light"><span data-i18n="appear.light"></span></label>
+        <label><input type="radio" name="appearance" value="dark"><span data-i18n="appear.dark"></span></label>
+        <label><input type="radio" name="appearance" value="system"><span data-i18n="appear.system"></span></label>
+      </div>
+      <p class="muted small" id="appearInfo"></p>
+    </div>
+    <form id="setForm" class="card form">
+      <div class="row"><label><span data-i18n="set.rate"></span> <input name="ratePerMin" type="number" min="1"></label><label><span data-i18n="set.gap"></span> <input name="perChatGapMs" type="number" min="0"></label></div>
+      <label><span data-i18n="set.allow"></span> <input name="sendAllowlist" data-i18n-ph="set.allowPh"></label>
+      <label class="inline"><input type="checkbox" name="allowColdContacts"> <span data-i18n="set.cold"></span></label>
+      <label class="inline"><input type="checkbox" name="otpEnabled"> <span data-i18n="set.otp"></span></label>
+      <div class="row"><label><span data-i18n="set.ttl"></span> <input name="oauthAccessTtl" type="number" min="300"></label><label><span data-i18n="set.refresh"></span> <input name="oauthRefreshDays" type="number" min="1"></label></div>
+      <div class="row"><label><span data-i18n="set.publicUrl"></span> <input name="publicUrl" placeholder="https://whatsops.example.com"></label><label class="narrow"><span data-i18n="set.maxMedia"></span> <input name="maxMediaMb" type="number" min="1"></label></div>
+      <button type="submit" data-i18n="save"></button>
+    </form>
+    <form id="pwForm" class="card form">
+      <h3 data-i18n="pw.title"></h3>
+      <p class="muted" id="pwState"></p>
+      <label><span data-i18n="pw.new"></span> <input name="password" type="password" minlength="10" autocomplete="new-password"></label>
+      <div class="row"><button type="submit" data-i18n="pw.save"></button><button type="button" id="pwClear" class="ghost" data-i18n="pw.clear"></button></div>
+    </form>
+    <div class="card form"><h3 data-i18n="link.title"></h3><p class="muted" data-i18n="link.hint"></p><button id="mkLink" class="ghost" data-i18n="link.make"></button><div id="linkOut" class="reveal" hidden></div>
+    <h3 data-i18n="svc.title"></h3><p class="muted" id="svcInfo"></p><button id="restart" class="ghost" data-i18n="svc.restart"></button></div>
+    </div>
+    <div class="sub" id="settings-db">
+    <div class="card"><div id="dbCurrent"></div></div>
+    <form id="dbForm" class="card form">
+      <h3 data-i18n="db.move"></h3>
+      <label><span data-i18n="db.type"></span> <select name="type"><option value="sqlite" data-i18n="db.sqlite"></option><option value="postgres">PostgreSQL</option><option value="mysql">MySQL / MariaDB</option></select></label>
+      <div data-for="sqlite"><label><span data-i18n="db.path"></span> <input name="path"></label></div>
+      <div data-for="net" hidden>
+        <div class="row"><label><span data-i18n="db.host"></span> <input name="host" placeholder="127.0.0.1"></label><label class="narrow"><span data-i18n="db.port"></span> <input name="port" placeholder="5432"></label></div>
+        <div class="row"><label><span data-i18n="db.database"></span> <input name="database" placeholder="whatsapp"></label><label><span data-i18n="db.user"></span> <input name="user"></label></div>
+        <label><span data-i18n="db.password"></span> <input name="password" type="password" autocomplete="new-password"></label>
+        <label class="inline"><input type="checkbox" name="ssl"> <span data-i18n="db.ssl"></span></label>
+      </div>
+      <label><span data-i18n="db.url"></span> <input name="url" placeholder="postgres://user:pass@host:5432/db"></label>
+      <label class="inline"><input type="checkbox" name="copy" checked> <span data-i18n="db.copy"></span></label>
+      <div class="row"><button type="button" id="dbTest" class="ghost" data-i18n="db.test"></button><button type="submit" data-i18n="db.switch"></button></div>
+      <div id="dbResult" class="muted"></div>
+    </form>
+    </div>
+  </section>
+
+</main>
+
+<dialog id="pairDlg">
+  <form method="dialog" class="dlg">
+    <h3 id="pairTitle"></h3>
+    <div id="pairChoose">
+      <p class="muted" data-i18n-html="pair.choose"></p>
+      <div class="row"><button type="button" id="pairQr" data-i18n="pair.qr"></button><button type="button" id="pairCodeBtn" class="ghost" data-i18n="pair.code"></button></div>
+      <div id="pairPhoneBox" hidden><label><span data-i18n="pair.phone"></span> <input id="pairPhone" placeholder="+971501234567"></label><button type="button" id="pairCodeGo" data-i18n="pair.codeGo"></button></div>
+    </div>
+    <div id="pairShow" hidden>
+      <img id="pairImg" alt="QR" hidden>
+      <div id="pairCode" class="bigcode" hidden></div>
+      <p id="pairHelp" class="muted"></p>
+      <p id="pairState" class="state"></p>
+    </div>
+    <div class="row"><button value="close" class="ghost" data-i18n="close"></button></div>
+  </form>
+</dialog>
+
+<dialog id="addDlg">
+  <form method="dialog" class="dlg" id="addForm">
+    <h3 data-i18n="add.title"></h3>
+    <label><span data-i18n="add.label"></span> <input name="label" required data-i18n-ph="add.labelPh"></label>
+    <label><span data-i18n="add.phone"></span> <input name="phone" placeholder="+971501234567"></label>
+    <label class="inline"><input type="checkbox" name="sync" checked> <span data-i18n="add.sync"></span></label>
+    <div class="row"><button value="cancel" class="ghost" formnovalidate data-i18n="cancel"></button><button value="ok" id="addGo" data-i18n="add.go"></button></div>
+  </form>
+</dialog>
+
+<dialog id="importDlg">
+  <form method="dialog" class="dlg" id="importForm">
+    <h3 data-i18n="import.title"></h3>
+    <p class="muted" data-i18n="import.hint"></p>
+    <label><span data-i18n="import.session"></span> <input name="sessionDir" placeholder="~/.hermes/whatsapp/session"></label>
+    <label><span data-i18n="import.history"></span> <input name="historyDb" placeholder="~/.hermes/whatsapp/history.db"></label>
+    <div class="row"><button value="cancel" class="ghost" formnovalidate data-i18n="cancel"></button><button value="ok" data-i18n="import.go"></button></div>
+  </form>
+</dialog>
+
+<div id="toast"></div>
+<script src="/static/app.js?v=13"></script>
+</body>
+</html>

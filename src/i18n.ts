@@ -1,0 +1,290 @@
+/**
+ * Bilingual (English / Italian) strings for everything the server says:
+ * MCP tool titles & descriptions, error messages, login/consent pages, the WhatsApp login code.
+ *
+ * Keys are the English source strings (gettext style); keys starting with "@" are long texts.
+ * Language resolution:
+ *   - server default: settings.language ('auto' | 'en' | 'it'); 'auto' = WA_LANG env, else the OS locale
+ *   - per request: ?lang= (API clients) > Accept-Language > server default — no manual switch in the UI
+ */
+import type { FastifyRequest } from 'fastify'
+import { AppError, fmt } from './util.js'
+
+export type Lang = 'en' | 'it'
+export const LANGS: Lang[] = ['en', 'it']
+
+export function normLang(v?: string | null): Lang | null {
+  if (!v) return null
+  const l = String(v).toLowerCase().trim()
+  if (l.startsWith('it')) return 'it'
+  if (l.startsWith('en')) return 'en'
+  return null
+}
+
+/** Language of the operating system the server runs on. */
+export function osLang(): Lang {
+  const env = process.env
+  for (const v of [env.WA_LANG, env.LC_ALL, env.LC_MESSAGES, (env.LANGUAGE ?? '').split(':')[0], env.LANG]) {
+    if (!v || v === 'C' || v.startsWith('C.') || v === 'POSIX') continue
+    const l = normLang(v)
+    if (l) return l
+  }
+  try {
+    return normLang(Intl.DateTimeFormat().resolvedOptions().locale) ?? 'en'
+  } catch {
+    return 'en'
+  }
+}
+
+let serverDefault: Lang = osLang()
+
+export function setServerLanguage(setting: string | undefined): Lang {
+  serverDefault = normLang(setting) ?? osLang()
+  return serverDefault
+}
+
+export function defaultLang(): Lang {
+  return serverDefault
+}
+
+export function fromAcceptLanguage(h?: string | string[] | null): Lang | null {
+  if (!h) return null
+  const items = String(Array.isArray(h) ? h.join(',') : h)
+    .split(',')
+    .map((p) => {
+      const [tag, ...rest] = p.trim().split(';')
+      const q = rest.find((r) => r.trim().startsWith('q='))
+      return { tag, q: q ? Number(q.trim().slice(2)) || 0 : 1 }
+    })
+    .filter((x) => x.tag && x.tag !== '*' && x.q > 0)
+    .sort((a, b) => b.q - a.q)
+  for (const it of items) {
+    const l = normLang(it.tag)
+    if (l) return l
+  }
+  return null
+}
+
+export function reqLang(req: FastifyRequest): Lang {
+  const q = (req.query ?? {}) as Record<string, unknown>
+  return (
+    normLang(typeof q.lang === 'string' ? q.lang : null) ??
+    fromAcceptLanguage(req.headers['accept-language']) ??
+    serverDefault
+  )
+}
+
+export function tr(lang: Lang, s: string, params: unknown[] = []): string {
+  const dict = lang === 'it' ? IT : EN
+  const t = dict[s] ?? EN[s] ?? s
+  return fmt(t, params)
+}
+
+export function localizeError(e: AppError, lang: Lang): string {
+  return tr(lang, e.template, e.params)
+}
+
+// ---------------------------------------------------------------------------
+// English long texts
+// ---------------------------------------------------------------------------
+const EN: Record<string, string> = {
+  '@instructions': `WhatsApp (Baileys linked device) for the owner's own WhatsApp numbers.
+- Recipients/chats accept a phone number in international format (+971501234567), a JID (…@s.whatsapp.net, …@g.us, …@lid) or an exact chat/contact name.
+- Resolve people with whatsapp_find_contact before sending when you only have a name.
+- Messages are sent as the owner: confirm wording and recipient with the user before calling a send tool unless they explicitly asked you to send.
+- Use whatsapp_accounts to see which numbers are connected; pass "account" to pick a non-default number.
+- Reply to the user in their language.`,
+  '@otp': '🔐 WhatsOps login code: *{0}*\nValid for 5 minutes. If you did not request it, ignore this message.',
+  '@login_hint':
+    'First access, or no number linked yet? Ask your agent for a <i>login link</i> (valid 30 minutes) or run <code>mcp-mrg-whatsops login-link</code> on the server.',
+}
+
+// ---------------------------------------------------------------------------
+// Italian
+// ---------------------------------------------------------------------------
+const IT: Record<string, string> = {
+  '@instructions': `WhatsApp (dispositivo collegato via Baileys) sui numeri WhatsApp del proprietario.
+- Destinatari e chat accettano un numero in formato internazionale (+971501234567), un JID (…@s.whatsapp.net, …@g.us, …@lid) o il nome esatto di una chat/contatto.
+- Se hai solo un nome, risolvi la persona con whatsapp_find_contact prima di inviare.
+- I messaggi partono a nome del proprietario: conferma testo e destinatario con l'utente prima di usare uno strumento di invio, salvo che te l'abbia chiesto esplicitamente.
+- whatsapp_accounts mostra i numeri collegati; passa "account" per usare un numero diverso da quello predefinito.
+- Rispondi all'utente nella sua lingua.`,
+  '@otp': '🔐 Codice di accesso WhatsOps: *{0}*\nValido 5 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',
+  '@login_hint':
+    'Primo accesso o nessun numero collegato? Chiedi al tuo agente un <i>link di accesso</i> (valido 30 minuti) oppure esegui <code>mcp-mrg-whatsops login-link</code> sul server.',
+
+  // ---- server / MCP
+  'Read and send WhatsApp messages from your own numbers (multi-account, Baileys).': 'Leggi e invia messaggi WhatsApp dai tuoi numeri (più account, Baileys).',
+  'Unauthorized: sign in with OAuth or send Authorization: Bearer <API key>': 'Non autorizzato: accedi con OAuth oppure invia Authorization: Bearer <chiave API>',
+  'Method not allowed (stateless server: use POST)': 'Metodo non consentito (server stateless: usa POST)',
+  'WhatsApp account id or phone number to use. Omit for the default account (see whatsapp_accounts).':
+    'Id account o numero WhatsApp da usare. Ometti per il numero predefinito (vedi whatsapp_accounts).',
+  'List WhatsApp numbers': 'Elenca numeri WhatsApp',
+  'List the WhatsApp numbers (accounts) configured on this server with their connection state.': 'Elenca i numeri WhatsApp (account) configurati su questo server con lo stato di connessione.',
+  'List chats': 'Elenca chat',
+  'List recent chats (most recent first) with the last message preview and unread count.': 'Elenca le chat recenti (dalla più recente) con anteprima dell’ultimo messaggio e numero di non letti.',
+  'Max chats (default 30)': 'Numero massimo di chat (predefinito 30)',
+  'Skip this many chats (paging)': 'Salta questo numero di chat (paginazione)',
+  'Only chats with unread messages': 'Solo chat con messaggi non letti',
+  'Filter by chat name': 'Filtra per nome della chat',
+  'Chat type: all, groups or direct': 'Tipo di chat: all (tutte), groups (gruppi) o direct (individuali)',
+  'Read chat messages': 'Leggi messaggi della chat',
+  'Get messages of one chat in chronological order (oldest → newest). Use before/after (ISO date) to page.':
+    'Messaggi di una chat in ordine cronologico (dal più vecchio al più recente). Usa before/after (data ISO) per scorrere.',
+  'Phone number (+971…), JID or exact chat/contact name': 'Numero (+971…), JID o nome esatto della chat/contatto',
+  'Max messages (default 30)': 'Numero massimo di messaggi (predefinito 30)',
+  'Only messages before this ISO timestamp': 'Solo messaggi precedenti a questa data ISO',
+  'Only messages after this ISO timestamp': 'Solo messaggi successivi a questa data ISO',
+  'Search messages': 'Cerca messaggi',
+  'Full-text search across stored WhatsApp messages (newest first).': 'Ricerca testuale nei messaggi WhatsApp salvati (dai più recenti).',
+  'Text to search for': 'Testo da cercare',
+  'Restrict to one chat (number, JID or name)': 'Limita a una chat (numero, JID o nome)',
+  'ISO date lower bound': 'Data ISO minima',
+  'Max results (default 30)': 'Numero massimo di risultati (predefinito 30)',
+  'Find contact': 'Trova contatto',
+  'Find contacts, chats and groups by name or (partial) phone number. Returns JIDs and phone numbers to use with other tools.':
+    'Trova contatti, chat e gruppi per nome o numero (anche parziale). Restituisce JID e numeri da usare con gli altri strumenti.',
+  'Name or phone number': 'Nome o numero di telefono',
+  'Max results (default 20)': 'Numero massimo di risultati (predefinito 20)',
+  'Check number on WhatsApp': 'Verifica numero su WhatsApp',
+  'Check whether a phone number has WhatsApp.': 'Verifica se un numero di telefono ha WhatsApp.',
+  'Phone number in international format': 'Numero in formato internazionale',
+  'List groups': 'Elenca gruppi',
+  'List the WhatsApp groups this number participates in.': 'Elenca i gruppi WhatsApp di cui fa parte questo numero.',
+  'Filter by group name': 'Filtra per nome del gruppo',
+  'Re-fetch from WhatsApp first': 'Aggiorna prima da WhatsApp',
+  'Group details': 'Dettagli gruppo',
+  'Group metadata with participants (names, phone numbers, admins).': 'Dati del gruppo con i partecipanti (nomi, numeri, amministratori).',
+  'Group JID (…@g.us) or exact group name': 'JID del gruppo (…@g.us) o nome esatto del gruppo',
+  'Send text message': 'Invia messaggio di testo',
+  'Send a WhatsApp text message as the owner. Confirm recipient and text with the user first.': 'Invia un messaggio di testo WhatsApp a nome del proprietario. Conferma prima destinatario e testo con l’utente.',
+  'Phone number (+971…), JID, group JID or exact chat name': 'Numero (+971…), JID, JID di gruppo o nome esatto della chat',
+  'Message text': 'Testo del messaggio',
+  'Message id to quote': 'Id del messaggio da citare',
+  'Phone numbers/JIDs to @mention (groups)': 'Numeri/JID da @menzionare (gruppi)',
+  'Same key = sent at most once': 'Stessa chiave = inviato al massimo una volta',
+  'Send media': 'Invia media',
+  'Send an image, video, audio/voice note, document or sticker from a public URL or base64.': 'Invia immagine, video, audio/vocale, documento o sticker da un URL pubblico o in base64.',
+  'Recipient: phone number, JID or exact chat name': 'Destinatario: numero, JID o nome esatto della chat',
+  'Media type': 'Tipo di media',
+  'http(s) URL of the file': 'URL http(s) del file',
+  'File content as base64 (or data: URL)': 'Contenuto del file in base64 (o data: URL)',
+  'MIME type, e.g. image/jpeg': 'Tipo MIME, es. image/jpeg',
+  'File name (documents)': 'Nome del file (documenti)',
+  Caption: 'Didascalia',
+  'Send audio as a voice note': 'Invia l’audio come messaggio vocale',
+  'Send location': 'Invia posizione',
+  'Send a location pin.': 'Invia una posizione sulla mappa.',
+  Latitude: 'Latitudine',
+  Longitude: 'Longitudine',
+  'Place name': 'Nome del luogo',
+  Address: 'Indirizzo',
+  'React to message': 'Reagisci al messaggio',
+  'React to a message with an emoji (empty emoji removes the reaction).': 'Reagisci a un messaggio con un’emoji (emoji vuota = rimuove la reazione).',
+  'Chat: phone number, JID or exact chat name': 'Chat: numero, JID o nome esatto della chat',
+  'Message id': 'Id del messaggio',
+  'e.g. 👍 — empty string removes': 'es. 👍 — stringa vuota per rimuovere',
+  'Mark as read': 'Segna come letto',
+  'Mark a chat (or specific messages) as read — sends blue ticks.': 'Segna come letta una chat (o messaggi specifici): invia le spunte blu.',
+  'Message ids (default: latest received)': 'Id dei messaggi (predefinito: gli ultimi ricevuti)',
+  'Edit message': 'Modifica messaggio',
+  'Edit the text of a message previously sent by this number.': 'Modifica il testo di un messaggio inviato in precedenza da questo numero.',
+  'New text': 'Nuovo testo',
+  'Delete message for everyone': 'Elimina messaggio per tutti',
+  'Delete (revoke) a message for everyone.': 'Elimina (revoca) un messaggio per tutti.',
+  'Download media': 'Scarica media',
+  'Get the media of a message: returns a temporary download link (1 h) and, for small images, the image itself.':
+    'Ottieni il media di un messaggio: restituisce un link temporaneo (1 ora) e, per le immagini piccole, l’immagine stessa.',
+
+  // ---- pages
+  'Sign in · WhatsOps': 'Accesso · WhatsOps',
+  'Configuration of the WhatsApp server (numbers, database, API keys, MCP connectors).': 'Configurazione del server WhatsApp (numeri, database, chiavi API, connettori MCP).',
+  'Get a login code in the <b>“Message yourself”</b> chat of the linked WhatsApp number.': 'Ricevi un codice di accesso nella chat <b>“Messaggi a te stesso”</b> del numero WhatsApp collegato.',
+  'Send me the code on WhatsApp': 'Mandami il codice su WhatsApp',
+  'Sign in': 'Entra',
+  'Admin password': 'Password amministratore',
+  'Sign in with password': 'Entra con password',
+  'Code sent to {0} · resend': 'Codice inviato a {0} · reinvia',
+  'Authorize · WhatsOps': 'Autorizza · WhatsOps',
+  'Read chats, messages, contacts and groups': 'Leggere chat, messaggi, contatti e gruppi',
+  'Send messages, media and reactions on your behalf': 'Inviare messaggi, media e reazioni a tuo nome',
+  '<b>{0}</b> is asking for access to your WhatsApp.': '<b>{0}</b> chiede accesso al tuo WhatsApp.',
+  'Sign in as the owner first.': 'Prima accedi come proprietario.',
+  '<b>{0}</b> wants to connect to your WhatsApp server.': '<b>{0}</b> vuole collegarsi al tuo server WhatsApp.',
+  'After authorizing you will be sent back to <b>{0}</b>. You can revoke access at any time from the config page → Connectors.':
+    'Dopo l’autorizzazione verrai rimandato a <b>{0}</b>. Puoi revocare l’accesso in qualsiasi momento dalla pagina di configurazione → Connettori.',
+  Deny: 'Rifiuta',
+  Authorize: 'Autorizza',
+  'Authorization · WhatsOps': 'Autorizzazione · WhatsOps',
+  'Incomplete authorization URL.': 'URL di autorizzazione incompleta.',
+  'client_id, redirect_uri or code_challenge (PKCE) is missing. Start the connection from your MCP client (Cursor, Claude, Grok…) using the server address:':
+    'Mancano client_id, redirect_uri o code_challenge (PKCE). Avvia la connessione dal client MCP (Cursor, Claude, Grok…) usando l’indirizzo del server:',
+  'For clients without OAuth, create an API key on the config page.': 'Per i client senza OAuth crea una chiave API nella pagina di configurazione.',
+  'Open config page': 'Apri configurazione',
+  Continue: 'Continua',
+  'Invalid link': 'Link non valido',
+  'Login link expired or already used. Ask for a new one.': 'Link di accesso scaduto o già usato. Chiedine uno nuovo.',
+  'Sign in to the WhatsOps config first': 'Accedi prima alla configurazione di WhatsOps',
+  'The owner denied access': 'Il proprietario ha negato l’accesso',
+  'Unknown client_id "{0}". Register the client (dynamic registration) or use a known id such as "grok".':
+    'client_id "{0}" sconosciuto. Registra il client (registrazione dinamica) o usa un id noto come "grok".',
+  'redirect_uri missing or not registered for this client': 'redirect_uri mancante o non registrato per questo client',
+
+  // ---- errors
+  'Recipient is empty': 'Destinatario vuoto',
+  'Unsupported JID server {0}': 'Server JID non supportato: {0}',
+  '"{0}" is not a valid phone number (use international format, e.g. +971501234567)': '"{0}" non è un numero valido (usa il formato internazionale, es. +971501234567)',
+  'This credential lacks the "{0}" scope': 'Questa credenziale non ha il permesso "{0}"',
+  'This credential cannot use account "{0}"': 'Questa credenziale non può usare l’account "{0}"',
+  'Missing or invalid credentials (Bearer API key, OAuth token or admin session)': 'Credenziali mancanti o non valide (chiave API Bearer, token OAuth o sessione amministratore)',
+  'WhatsApp login codes are disabled': 'L’accesso con codice WhatsApp è disattivato',
+  'Too many codes requested, wait a few minutes': 'Troppi codici richiesti, attendi qualche minuto',
+  'No connected WhatsApp number to send the code to. Use a login link.': 'Nessun numero WhatsApp connesso a cui inviare il codice. Usa un link di accesso.',
+  'Wrong or expired code': 'Codice errato o scaduto',
+  'Wrong password': 'Password errata',
+  'Connection failed: {0}': 'Connessione non riuscita: {0}',
+  'WA_DB_URL is set in the service environment; remove it to manage the database from here': 'WA_DB_URL è impostata nell’ambiente del servizio: rimuovila per gestire il database da qui',
+  'Switch aborted, still on the current database: {0}': 'Spostamento annullato, il database attuale resta in uso: {0}',
+  'webhook not found': 'webhook non trovato',
+  'A phone number in international format is required for pairing-code login': 'Per il collegamento con codice serve un numero in formato internazionale',
+  'WhatsApp account "{0}" is not connected (state: {1})': 'L’account WhatsApp "{0}" non è connesso (stato: {1})',
+  '+{0} is not on WhatsApp': '+{0} non è su WhatsApp',
+  'WhatsApp did not return a message': 'WhatsApp non ha restituito il messaggio',
+  '{0} not found': '{0} non trovato',
+  'That session folder is not linked to a WhatsApp account': 'Quella cartella di sessione non è collegata a un account WhatsApp',
+  'No WhatsApp number is configured yet. Add one in the config page.': 'Nessun numero WhatsApp configurato. Aggiungine uno nella pagina di configurazione.',
+  'WhatsApp account "{0}" not found': 'Account WhatsApp "{0}" non trovato',
+  'chat/recipient is required': 'chat/destinatario obbligatorio',
+  'No chat or contact named "{0}". Use a phone number in international format.': 'Nessuna chat o contatto con nome "{0}". Usa un numero in formato internazionale.',
+  '"{0}" matches several chats: {1}. Use the phone number or JID.': '"{0}" corrisponde a più chat: {1}. Usa il numero o il JID.',
+  'Sending to {0} is blocked by the send allowlist (config page → Settings).': 'L’invio a {0} è bloccato dall’elenco dei destinatari consentiti (configurazione → Impostazioni).',
+  'No previous conversation with {0}; cold messaging is disabled in settings.': 'Nessuna conversazione precedente con {0}: i messaggi a nuovi contatti sono disattivati nelle impostazioni.',
+  'A send with this idempotency key is still in progress': 'Un invio con questa chiave di idempotenza è ancora in corso',
+  '{0} is not a group': '{0} non è un gruppo',
+  'Group {0} not found': 'Gruppo {0} non trovato',
+  'Message {0} not found in {1}': 'Messaggio {0} non trovato in {1}',
+  'text is required': 'il testo è obbligatorio',
+  'media url is not a valid URL': 'l’URL del media non è valido',
+  'Only http(s) media URLs are allowed': 'Sono ammessi solo URL http(s)',
+  'Fetching media failed: HTTP {0}': 'Download del media non riuscito: HTTP {0}',
+  'Media larger than {0} MB': 'Media più grande di {0} MB',
+  'media too large': 'media troppo grande',
+  'Provide url or base64': 'Fornisci url o base64',
+  'media is empty': 'il media è vuoto',
+  'Only messages sent by this account can be edited': 'Si possono modificare solo i messaggi inviati da questo account',
+  'Only your own messages can be deleted for everyone': 'Puoi eliminare per tutti solo i tuoi messaggi',
+  'Message {0} not found': 'Messaggio {0} non trovato',
+  'This message has no media': 'Questo messaggio non contiene media',
+  'media larger than the configured cap': 'media più grande del limite configurato',
+  'Media download failed: {0}': 'Download del media non riuscito: {0}',
+  'invalid media link': 'link al media non valido',
+  'media link expired': 'link al media scaduto',
+  'Too many failed attempts, try again in a few minutes': 'Troppi tentativi falliti, riprova fra qualche minuto',
+  'Password must be at least 10 characters': 'La password deve avere almeno 10 caratteri',
+  'At least one scope (read, send, admin) is required': 'Serve almeno un permesso (read, send, admin)',
+  'Internal error': 'Errore interno',
+  '{0} {1} not found': '{0} {1} non trovato',
+}
+
+/** All translatable keys (used by tests to make sure Italian covers every English string). */
+export const IT_KEYS = Object.keys(IT)

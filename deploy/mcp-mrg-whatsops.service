@@ -1,0 +1,24 @@
+# systemd user unit — copy to ~/.config/systemd/user/, adjust the paths, then:
+#   systemctl --user daemon-reload && systemctl --user enable --now mcp-mrg-whatsops
+#   loginctl enable-linger "$USER"   # keep it running after logout
+[Unit]
+Description=WhatsOps — WhatsApp REST API + MCP server (Baileys, multi-number)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/mcp-mrg-whatsops
+Environment=NODE_ENV=production
+# Environment=WA_PUBLIC_URL=https://whatsops.example.com
+EnvironmentFile=-%h/.config/mcp-mrg-whatsops.env
+# use an absolute path to Node >= 24 if `node` is not on systemd's PATH
+ExecStart=/usr/bin/env node dist/main.js
+Restart=always
+RestartSec=3
+TimeoutStopSec=15
+UMask=0077
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target
