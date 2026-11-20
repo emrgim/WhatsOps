@@ -6,7 +6,7 @@
 '  - adds WhatsOps to the Start menu;
 '  - opens http://127.0.0.1:8810 already signed in (one-time link).
 Option Explicit
-Dim sh, fso, here, seed, data, rt, port, ver, cur, changed, i, url, tmp, node, cli, pid, lnk
+Dim sh, fso, here, seed, data, rt, port, ver, cur, changed, i, url, tmp, node, cli, pid, lnk, quiet, lf
 
 Set sh = CreateObject("WScript.Shell")
 Set fso = CreateObject("Scripting.FileSystemObject")
@@ -56,6 +56,9 @@ End Function
 
 If Not fso.FolderExists(data) Then fso.CreateFolder data
 If Not fso.FolderExists(rt) Then fso.CreateFolder rt
+' installed again after an uninstall: the service may run again
+If fso.FileExists(rt & "\stop") Then fso.DeleteFile rt & "\stop", True
+quiet = (sh.ExpandEnvironmentStrings("%WHATSOPS_NO_BROWSER%") <> "%WHATSOPS_NO_BROWSER%")
 
 ' ---- install / upgrade from the runtime next to this file
 changed = False
@@ -80,20 +83,23 @@ If fso.FolderExists(seed) Then
 End If
 cur = ReadText(rt & "\current")
 If cur = "" Then
-  MsgBox "WhatsOps is not installed: open the WhatsOps folder you downloaded and run WhatsOps.vbs there.", vbExclamation, "WhatsOps"
+  If quiet Then WScript.Echo "WhatsOps is not installed" Else MsgBox "WhatsOps is not installed: open the WhatsOps folder you downloaded and run WhatsOps.vbs there.", vbExclamation, "WhatsOps"
   WScript.Quit 1
 End If
 fso.CopyFile rt & "\" & cur & "\app\packaging\windows\run.vbs", rt & "\run.vbs", True
 
 ' ---- start at sign-in, Start menu
 sh.RegWrite "HKCU\Software\Microsoft\Windows\CurrentVersion\Run\WhatsOps", """" & sh.ExpandEnvironmentStrings("%SystemRoot%") & "\System32\wscript.exe"" """ & rt & "\run.vbs""", "REG_SZ"
-Set lnk = sh.CreateShortcut(sh.SpecialFolders("Programs") & "\WhatsOps.lnk")
-lnk.TargetPath = sh.ExpandEnvironmentStrings("%SystemRoot%") & "\System32\wscript.exe"
-lnk.Arguments = """" & rt & "\WhatsOps.vbs"""
-lnk.WorkingDirectory = rt
-If fso.FileExists(rt & "\WhatsOps.ico") Then lnk.IconLocation = rt & "\WhatsOps.ico"
-lnk.Description = "WhatsOps"
-lnk.Save
+' the setup (WhatsOps-...-setup.exe) makes its own Start menu entry and uninstaller
+If Not fso.FileExists(here & "\unins000.exe") Then
+  Set lnk = sh.CreateShortcut(sh.SpecialFolders("Programs") & "\WhatsOps.lnk")
+  lnk.TargetPath = sh.ExpandEnvironmentStrings("%SystemRoot%") & "\System32\wscript.exe"
+  lnk.Arguments = """" & rt & "\WhatsOps.vbs"""
+  lnk.WorkingDirectory = rt
+  If fso.FileExists(rt & "\WhatsOps.ico") Then lnk.IconLocation = rt & "\WhatsOps.ico"
+  lnk.Description = "WhatsOps"
+  lnk.Save
+End If
 
 ' ---- (re)start the service
 If changed And Healthy() Then
@@ -117,6 +123,13 @@ sh.Environment("Process")("WA_PORT") = port
 sh.Run """" & node & """ """ & cli & """ login-link --local --minutes 2 --out """ & tmp & """", 0, True
 url = ReadText(tmp)
 If fso.FileExists(tmp) Then fso.DeleteFile tmp, True
+If quiet Then
+  ' silent run (tests, scripts): print the sign-in link instead of opening the browser
+  lf = sh.ExpandEnvironmentStrings("%WHATSOPS_LINK_OUT%")
+  If lf <> "%WHATSOPS_LINK_OUT%" Then WriteText lf, url
+  WScript.Echo url
+  If Left(url, 4) = "http" Then WScript.Quit 0 Else WScript.Quit 1
+End If
 If Left(url, 4) = "http" Then
   sh.Run url
 Else

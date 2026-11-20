@@ -34,19 +34,23 @@ English and Italian: the config page follows the browser language, the server (M
 
 ## Install
 
-Download from the [latest release](https://github.com/emrgim/WhatsOps/releases/latest). Node.js is included: nothing else to install. Every package installs WhatsOps for your user, keeps it running in the background (it starts again at login) and opens **http://127.0.0.1:8810** already signed in. New versions install by themselves (Settings → Updates).
+Download the installer for your system from the [latest release](https://github.com/emrgim/WhatsOps/releases/latest). Node.js is included: nothing else to install. Every installer sets WhatsOps up for your user, keeps it running in the background (it starts again at login and after a crash) and opens **http://127.0.0.1:8810** already signed in. New versions install by themselves (Settings → Updates).
 
-| System | Package | Install |
+| System | Installer | Install |
 |---|---|---|
-| macOS Intel | `WhatsOps-<version>-macos-x64.zip` | Unzip, move **WhatsOps.app** to Applications, open it. |
-| macOS Apple Silicon | `WhatsOps-<version>-macos-arm64.zip` | Same. |
-| Windows 10/11 (x64) | `WhatsOps-<version>-windows-x64.zip` | Unzip, double-click **WhatsOps.vbs**. Then it is in the Start menu. |
-| Linux (x64, arm64) | script | `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/linux.sh \| bash` |
+| macOS Intel | `WhatsOps-<version>-macos-x64.dmg` | Open it, drag **WhatsOps** to **Applications**, open WhatsOps. |
+| macOS Apple Silicon (M1–M4) | `WhatsOps-<version>-macos-arm64.dmg` | Same. |
+| Windows 10/11 (x64) | `WhatsOps-<version>-windows-x64-setup.exe` | Run it: no administrator rights needed. WhatsOps goes in the Start menu. |
+| Debian, Ubuntu, Mint… (x64, arm64) | `WhatsOps-<version>-linux-<x64\|arm64>.deb` | `sudo apt install ./WhatsOps-<version>-linux-x64.deb`, then open WhatsOps from the applications menu. |
+| Fedora, openSUSE… (x64, arm64) | `WhatsOps-<version>-linux-<x64\|arm64>.rpm` | `sudo dnf install ./WhatsOps-<version>-linux-x64.rpm`, then open WhatsOps from the applications menu. |
+| Any Linux (no root) | script | `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/linux.sh \| bash` |
 | Omarchy | script | `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/omarchy.sh \| bash` — opens as an Omarchy web app. |
 
-The packages are not signed with paid Apple / Microsoft certificates, so the first time:
-- **macOS**: if it says it cannot check the app, right-click WhatsOps.app → **Open** → **Open** (macOS 15 and later: System Settings → Privacy & Security → **Open Anyway**). Once.
-- **Windows**: if it asks whether to run a file downloaded from the internet, choose **Open** / **Run**. Once.
+Which Mac? Apple menu → About This Mac: *Chip Apple M…* → arm64, *Processor Intel* → x64. The `whatsops-…-runtime-….tar.gz` files in a release are not installers: WhatsOps downloads them when it updates itself.
+
+The installers are not signed with paid Apple / Microsoft certificates, so the first time:
+- **macOS**: if it says it cannot check the app, right-click WhatsOps → **Open** → **Open** (macOS 15 and later: System Settings → Privacy & Security → **Open Anyway**). Once.
+- **Windows**: if SmartScreen says *Windows protected your PC*, click **More info** → **Run anyway**. Once.
 
 Then go to **Numbers → Add number** and link the phone with the QR code or with a pairing code (WhatsApp → Linked devices → Link with phone number).
 
@@ -57,9 +61,12 @@ Where things are:
 | Data (database, sessions, media, logs) | `~/Library/Application Support/mcp-mrg-whatsops` | `%LOCALAPPDATA%\mcp-mrg-whatsops` | `~/.local/share/mcp-mrg-whatsops` |
 | Background service | LaunchAgent `im.mrg.whatsops` | sign-in entry `WhatsOps` (HKCU Run) | systemd user unit `whatsops.service` |
 
-Uninstall: macOS `launchctl bootout gui/$(id -u)/im.mrg.whatsops && rm ~/Library/LaunchAgents/im.mrg.whatsops.plist`, then delete WhatsOps.app (and the data folder to delete everything); Windows see `README.txt` in the zip; Linux `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/linux.sh | bash -s -- --uninstall` (`--uninstall --purge` deletes the data too).
+Uninstall:
+- **macOS**: `launchctl bootout gui/$(id -u)/im.mrg.whatsops; rm ~/Library/LaunchAgents/im.mrg.whatsops.plist`, then move WhatsOps to the Trash (delete the data folder too to remove everything).
+- **Windows**: Settings → Apps → WhatsOps → Uninstall. It stops WhatsOps and asks whether to delete your data.
+- **Linux**: `whatsops --uninstall` (packages) or `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/linux.sh | bash -s -- --uninstall`; add `--purge` to delete the data. Then `sudo apt remove whatsops` / `sudo dnf remove whatsops` if you used a package.
 
-The packages are built by GitHub Actions for every release ([`.github/workflows/packages.yml`](.github/workflows/packages.yml), [`packaging/build.mjs`](packaging/build.mjs)); each one is started once on its own system before it is published.
+The installers are built by GitHub Actions for every release ([`.github/workflows/packages.yml`](.github/workflows/packages.yml), [`packaging/build.mjs`](packaging/build.mjs)). Before a release gets them, each one is installed on its own system (macOS Intel and Apple Silicon, Windows, Ubuntu x64 and arm64), started, killed — it must come back by itself — and uninstalled.
 
 ### From source (git)
 

@@ -17,7 +17,30 @@ PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PORT="${WA_PORT:-8810}"
 DOMAIN="gui/$(id -u)"
 
-alert() { /usr/bin/osascript -e "display alert \"WhatsOps\" message \"$1\"" >/dev/null 2>&1 || echo "$1" >&2; }
+alert() {
+  echo "WhatsOps: $1" >&2
+  # silent runs (tests, scripts) never wait on a dialog
+  [ -n "${WHATSOPS_NO_BROWSER:-}" ] || /usr/bin/osascript -e "display alert \"WhatsOps\" message \"$1\"" >/dev/null 2>&1 || true
+}
+# the LaunchAgent lives in the GUI session; without one (e.g. over SSH) in the user domain
+loaded() {
+  local d
+  for d in "gui/$(id -u)" "user/$(id -u)"; do
+    if /bin/launchctl print "$d/$LABEL" >/dev/null 2>&1; then
+      DOMAIN="$d"
+      return 0
+    fi
+  done
+  return 1
+}
+boot() {
+  if /bin/launchctl bootstrap "gui/$(id -u)" "$PLIST" 2>/dev/null; then
+    DOMAIN="gui/$(id -u)"
+  else
+    DOMAIN="user/$(id -u)"
+    /bin/launchctl bootstrap "$DOMAIN" "$PLIST"
+  fi
+}
 # is version $1 newer than $2 (x.y.z)?
 newer() {
   local IFS=. a b i
@@ -84,12 +107,15 @@ EOF
 
 if ! cmp -s "$PLIST.tmp" "$PLIST"; then
   mv "$PLIST.tmp" "$PLIST"
-  /bin/launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
-  /bin/launchctl bootstrap "$DOMAIN" "$PLIST"
+  if loaded; then
+    /bin/launchctl bootout "$DOMAIN/$LABEL" >/dev/null 2>&1 || true
+    sleep 1
+  fi
+  boot
 else
   rm -f "$PLIST.tmp"
-  if ! /bin/launchctl print "$DOMAIN/$LABEL" >/dev/null 2>&1; then
-    /bin/launchctl bootstrap "$DOMAIN" "$PLIST"
+  if ! loaded; then
+    boot
   elif [ "$CHANGED" = 1 ]; then
     /bin/launchctl kickstart -k "$DOMAIN/$LABEL"
   fi
@@ -105,7 +131,7 @@ V="$(cat "$RT/current")"
 URL="$(WA_PORT="$PORT" "$RT/$V/node/bin/node" "$RT/$V/app/dist/cli.js" login-link --local --minutes 2 2>>"$LOGS/launchd.log" | tail -1)"
 if [ -n "${WHATSOPS_NO_BROWSER:-}" ]; then
   echo "$URL"
-  exit 0
+  case "$URL" in http*) exit 0 ;; *) exit 1 ;; esac
 fi
 case "$URL" in
   http*) /usr/bin/open "$URL" ;;

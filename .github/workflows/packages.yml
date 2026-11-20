@@ -1,4 +1,4 @@
-# Builds the WhatsOps packages for every system and attaches them to the release.
+# Builds the WhatsOps installers for every system, tests each one on its own system, and attaches them to the release.
 # Runs by itself when a release is published; can be re-run by hand for an existing tag.
 name: Packages
 
@@ -40,7 +40,13 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run build
       - run: npm prune --omit=dev --no-audit --no-fund
-      - run: node packaging/build.mjs ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: rpmbuild (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update -q && sudo apt-get install -y -q rpm
+      - name: Build the installers, install and uninstall each one on this runner
+        run: node packaging/build.mjs ${{ matrix.platform }} ${{ matrix.arch }}
+        env:
+          WHATSOPS_INSTALL_TEST: '1'
       - name: Attach to the release
         shell: bash
         run: gh release upload "$TAG" out/upload/* --clobber --repo "$GITHUB_REPOSITORY"
