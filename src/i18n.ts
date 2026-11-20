@@ -362,6 +362,7 @@ const IT: Record<string, string> = {
   'Create the personal link (valid 14 days) where a Current RMS user registers their WhatsApp number with a code sent on WhatsApp. They then become admin of the groups of the records they own. Give the link only to that user: a new link cancels the previous one.': 'Crea il link personale (valido 14 giorni) dove un utente Current RMS registra il suo numero WhatsApp con un codice inviato su WhatsApp. Poi diventa amministratore dei gruppi dei record di cui è proprietario. Dai il link solo a quell\'utente: un nuovo link annulla il precedente.',
   'Current RMS user id (from currentrms_users)': 'Id utente Current RMS (da currentrms_users)',
   'Choose 2, 5, 15 or 30 minutes': 'Scegli 2, 5, 15 o 30 minuti',
+  'Version {0} for this system is not published yet: trying again later': 'La versione {0} per questo sistema non è ancora pubblicata: riprovo più tardi',
 }
 
 /** All translatable keys (used by tests to make sure Italian covers every English string). */

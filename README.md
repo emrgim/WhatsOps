@@ -32,7 +32,36 @@ English and Italian: the config page follows the browser language, the server (M
 
 `whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `currentrms_users`, `currentrms_user_invite`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
 
-## Install (from source)
+## Install
+
+Download from the [latest release](https://github.com/emrgim/WhatsOps/releases/latest). Node.js is included: nothing else to install. Every package installs WhatsOps for your user, keeps it running in the background (it starts again at login) and opens **http://127.0.0.1:8810** already signed in. New versions install by themselves (Settings → Updates).
+
+| System | Package | Install |
+|---|---|---|
+| macOS Intel | `WhatsOps-<version>-macos-x64.zip` | Unzip, move **WhatsOps.app** to Applications, open it. |
+| macOS Apple Silicon | `WhatsOps-<version>-macos-arm64.zip` | Same. |
+| Windows 10/11 (x64) | `WhatsOps-<version>-windows-x64.zip` | Unzip, double-click **WhatsOps.vbs**. Then it is in the Start menu. |
+| Linux (x64, arm64) | script | `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/linux.sh \| bash` |
+| Omarchy | script | `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/omarchy.sh \| bash` — opens as an Omarchy web app. |
+
+The packages are not signed with paid Apple / Microsoft certificates, so the first time:
+- **macOS**: if it says it cannot check the app, right-click WhatsOps.app → **Open** → **Open** (macOS 15 and later: System Settings → Privacy & Security → **Open Anyway**). Once.
+- **Windows**: if it asks whether to run a file downloaded from the internet, choose **Open** / **Run**. Once.
+
+Then go to **Numbers → Add number** and link the phone with the QR code or with a pairing code (WhatsApp → Linked devices → Link with phone number).
+
+Where things are:
+
+| | macOS | Windows | Linux |
+|---|---|---|---|
+| Data (database, sessions, media, logs) | `~/Library/Application Support/mcp-mrg-whatsops` | `%LOCALAPPDATA%\mcp-mrg-whatsops` | `~/.local/share/mcp-mrg-whatsops` |
+| Background service | LaunchAgent `im.mrg.whatsops` | sign-in entry `WhatsOps` (HKCU Run) | systemd user unit `whatsops.service` |
+
+Uninstall: macOS `launchctl bootout gui/$(id -u)/im.mrg.whatsops && rm ~/Library/LaunchAgents/im.mrg.whatsops.plist`, then delete WhatsOps.app (and the data folder to delete everything); Windows see `README.txt` in the zip; Linux `curl -fsSL https://raw.githubusercontent.com/emrgim/WhatsOps/main/install/linux.sh | bash -s -- --uninstall` (`--uninstall --purge` deletes the data too).
+
+The packages are built by GitHub Actions for every release ([`.github/workflows/packages.yml`](.github/workflows/packages.yml), [`packaging/build.mjs`](packaging/build.mjs)); each one is started once on its own system before it is published.
+
+### From source (git)
 
 Requirements: **Node.js 24+** and git.
 

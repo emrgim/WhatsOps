@@ -2,13 +2,17 @@
  * Auto-update from the GitHub repository.
  *
  * Every few minutes (WA_UPDATE_INTERVAL_MIN, default 5) the server asks GitHub for the latest
- * release of the repo. When a newer version is published and "Update automatically" is on, a git
- * installation (the README's `git clone`) fetches the release tag, rebuilds (npm ci + build) and
- * restarts through its service manager (systemd / launchd). If the new version cannot start
- * (3 boots without staying up 2 minutes) it goes back to the previous version by itself.
- * Installations with local changes to tracked files are never touched.
+ * release of the repo. When a newer version is published and "Update automatically" is on:
+ *  - a git installation (the README's `git clone`) fetches the release tag, rebuilds (npm ci + build);
+ *  - a package installation (Mac app, Windows, Linux / Omarchy script) downloads the release's runtime
+ *    for its system (`whatsops-<version>-runtime-<os>-<arch>.tar.gz`), checks its SHA-256, unpacks it
+ *    next to the current one and switches `runtime/current`;
+ * then restarts through its service manager (launchd / systemd / the Windows launcher). If the new
+ * version cannot start (3 boots without staying up 2 minutes) it goes back to the previous version
+ * by itself. Git installations with local changes to tracked files are never touched.
  */
 import { execFile } from 'node:child_process'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -22,6 +26,12 @@ export const UPDATE_REPO = process.env.WA_UPDATE_REPO || process.env.WA_FEEDBACK
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const INTERVAL_MIN = Math.max(1, Number(process.env.WA_UPDATE_INTERVAL_MIN || 5))
 const HEALTHY_AFTER_MS = 120_000
+/** Set by the package launchers: <data>/runtime with `current`, `previous` and one folder per version. */
+const RUNTIME_DIR = process.env.WA_RUNTIME_DIR || ''
+const PKG_OS = process.platform === 'darwin' ? 'macos' : process.platform === 'win32' ? 'windows' : 'linux'
+const PKG_ARCH = process.arch === 'arm64' ? 'arm64' : 'x64'
+export const runtimeAsset = (version: string) => `whatsops-${version}-runtime-${PKG_OS}-${PKG_ARCH}.tar.gz`
+const VERSION_DIR = /^\d+\.\d+\.\d+([-+][\w.]+)?$/
 const MAX_BAD_BOOTS = 3
 
 type Release = { version: string; tag: string; url: string; notes: string; published: string }
@@ -67,7 +77,8 @@ export class Updater {
     private restart: (reason: string) => void,
   ) {}
 
-  mode(): 'git' | 'manual' {
+  mode(): 'git' | 'bundle' | 'manual' {
+    if (RUNTIME_DIR && fs.existsSync(path.join(RUNTIME_DIR, 'current'))) return 'bundle'
     return fs.existsSync(path.join(ROOT, '.git')) ? 'git' : 'manual'
   }
 
@@ -110,7 +121,10 @@ export class Updater {
     const raw = await getSetting(this.h, 'update_state')
     if (!raw) return
     const st = JSON.parse(raw) as UpdateState
-    if (st.healthy) return
+    if (st.healthy) {
+      this.cleanRuntimes()
+      return
+    }
     st.boots++
     if (st.boots > MAX_BAD_BOOTS && VERSION === st.to) {
       await this.rollback(st)
@@ -121,6 +135,7 @@ export class Updater {
     setTimeout(() => {
       st.healthy = true
       void setSetting(this.h, 'update_state', JSON.stringify(st))
+      this.cleanRuntimes()
     }, HEALTHY_AFTER_MS).unref()
   }
 
@@ -128,9 +143,14 @@ export class Updater {
     this.busy = 'rollback'
     logger.error({ mod: 'update', from: st.to, to: st.from }, `version ${st.to} does not stay up: going back to ${st.from}`)
     try {
-      await sh('git', ['reset', '--hard', '--quiet', st.fromSha])
-      await sh(NPM, ['ci', '--no-audit', '--no-fund', '--loglevel=error'], 15 * 60_000)
-      await sh(NPM, ['run', 'build'], 10 * 60_000)
+      if (this.mode() === 'bundle') {
+        if (!fs.existsSync(path.join(RUNTIME_DIR, st.from))) throw new Error(`version ${st.from} is no longer on disk`)
+        this.writeRuntimeFile('current', st.from)
+      } else {
+        await sh('git', ['reset', '--hard', '--quiet', st.fromSha])
+        await sh(NPM, ['ci', '--no-audit', '--no-fund', '--loglevel=error'], 15 * 60_000)
+        await sh(NPM, ['run', 'build'], 10 * 60_000)
+      }
       await setSetting(this.h, 'update_state', '')
       await this.skip(st.to)
       await this.setResult(false, `Version ${st.to} did not start: back to ${st.from}`)
@@ -212,20 +232,22 @@ export class Updater {
     if (this.busy) return
     try {
       await this.check()
-      if (this.available() && this.settings.get().autoUpdate && this.mode() === 'git' && this.skipped !== this.latest!.version) await this.apply('auto')
+      if (this.available() && this.settings.get().autoUpdate && this.mode() !== 'manual' && this.skipped !== this.latest!.version) await this.apply('auto')
     } catch (e) {
       this.lastError = e instanceof AppError ? e.message : String((e as Error)?.message ?? e)
       if (!(e instanceof AppError)) logger.warn({ mod: 'update', err: this.lastError }, 'update check failed')
     }
   }
 
-  /** Install the latest release (git installations). Throws AppError when it cannot. */
+  /** Install the latest release (git or package installations). Throws AppError when it cannot. */
   async apply(reason: 'auto' | 'manual'): Promise<void> {
     if (this.busy) throw new AppError('UPDATE_BUSY', 'An update is already running', 409)
-    if (this.mode() !== 'git') throw new AppError('UPDATE_MANUAL', 'This installation was not made with git clone: update it by hand', 409)
+    const mode = this.mode()
+    if (mode === 'manual') throw new AppError('UPDATE_MANUAL', 'This installation was not made with git clone: update it by hand', 409)
     const rel = this.latest ?? (await this.check())
     if (!rel || cmpVersion(rel.version, VERSION) <= 0) throw new AppError('UPDATE_NONE', 'Already up to date', 409)
     if (reason === 'manual') this.skipped = ''
+    if (mode === 'bundle') return this.applyBundle(rel, reason)
     this.busy = 'installing'
     let prev = ''
     let moved = false
@@ -270,6 +292,84 @@ export class Updater {
       throw new AppError('UPDATE_FAILED', 'The update failed; the previous version is still installed', 500)
     }
     await setSetting(this.h, 'update_state', JSON.stringify({ from: VERSION, fromSha: prev, to: rel.version, at: Date.now(), boots: 0, healthy: false } satisfies UpdateState))
+    await this.setResult(true, `Updated from ${VERSION} to ${rel.version}`)
+    logger.info({ mod: 'update', to: rel.version }, `version ${rel.version} installed, restarting`)
+    this.busy = null
+    if (this.supervised()) this.restart(`update to ${rel.version}`)
+    else this.restartNeeded = true
+  }
+
+  // ------------------------------------------------------------------ package installations
+  private writeRuntimeFile(name: 'current' | 'previous', value: string): void {
+    const tmp = path.join(RUNTIME_DIR, `${name}.tmp`)
+    fs.writeFileSync(tmp, value, { mode: 0o600 })
+    fs.renameSync(tmp, path.join(RUNTIME_DIR, name))
+  }
+
+  /** Keep only the current and the previous version on disk. */
+  private cleanRuntimes(): void {
+    if (this.mode() !== 'bundle') return
+    try {
+      const keep = new Set(['current', 'previous'].map((f) => (fs.existsSync(path.join(RUNTIME_DIR, f)) ? fs.readFileSync(path.join(RUNTIME_DIR, f), 'utf8').trim() : '')))
+      for (const d of fs.readdirSync(RUNTIME_DIR)) {
+        const base = d.replace(/\.(part|download)$/, '')
+        if (!VERSION_DIR.test(base) || (keep.has(d) && d === base)) continue
+        fs.rmSync(path.join(RUNTIME_DIR, d), { recursive: true, force: true })
+      }
+    } catch (e) {
+      logger.debug({ mod: 'update', err: String(e) }, 'old versions not removed')
+    }
+  }
+
+  private async applyBundle(rel: Release, reason: 'auto' | 'manual'): Promise<void> {
+    const name = runtimeAsset(rel.version)
+    const base = `https://github.com/${this.repo}/releases/download/${encodeURIComponent(rel.tag)}/`
+    // the packages are built by GitHub Actions a few minutes after the release: not there yet = try later
+    const sum = await fetch(base + name + '.sha256', { headers: { 'user-agent': `WhatsOps/${VERSION}` }, signal: AbortSignal.timeout(30_000) })
+    if (sum.status === 404) throw new AppError('UPDATE_NOT_READY', 'Version {0} for this system is not published yet: trying again later', 409, [rel.version])
+    if (!sum.ok) throw new Error(`GitHub ${sum.status}`)
+    const expected = (await sum.text()).trim().split(/\s+/)[0]?.toLowerCase() ?? ''
+    if (!/^[0-9a-f]{64}$/.test(expected)) throw new Error('bad checksum file')
+    this.busy = 'installing'
+    const file = path.join(RUNTIME_DIR, `${rel.version}.download`)
+    const part = path.join(RUNTIME_DIR, `${rel.version}.part`)
+    const dest = path.join(RUNTIME_DIR, rel.version)
+    try {
+      logger.info({ mod: 'update', from: VERSION, to: rel.version, reason }, `installing ${rel.version}`)
+      const r = await fetch(base + name, { headers: { 'user-agent': `WhatsOps/${VERSION}` }, signal: AbortSignal.timeout(15 * 60_000) })
+      if (!r.ok || !r.body) throw new Error(`download ${r.status}`)
+      const hash = crypto.createHash('sha256')
+      const out = fs.createWriteStream(file, { mode: 0o600 })
+      for await (const chunk of r.body as unknown as AsyncIterable<Uint8Array>) {
+        hash.update(chunk)
+        if (!out.write(chunk)) await new Promise<void>((res) => out.once('drain', () => res()))
+      }
+      await new Promise<void>((res, rej) => out.end((e?: Error | null) => (e ? rej(e) : res())))
+      if (hash.digest('hex') !== expected) throw new Error('the download does not match its SHA-256')
+      fs.rmSync(part, { recursive: true, force: true })
+      fs.mkdirSync(part, { recursive: true, mode: 0o700 })
+      // Windows: bsdtar from System32 (always there since Windows 10)
+      const tar = process.platform === 'win32' ? path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe') : 'tar'
+      await sh(tar, ['-xzf', file, '-C', part], 10 * 60_000)
+      const node = path.join(part, 'node', process.platform === 'win32' ? 'node.exe' : 'bin/node')
+      const pkg = JSON.parse(fs.readFileSync(path.join(part, 'app', 'package.json'), 'utf8')) as { version?: string }
+      if (!fs.existsSync(node) || !fs.existsSync(path.join(part, 'app', 'dist', 'main.js')) || pkg.version !== rel.version) throw new Error('the package is incomplete')
+      fs.rmSync(dest, { recursive: true, force: true })
+      fs.renameSync(part, dest)
+      this.writeRuntimeFile('previous', VERSION)
+      this.writeRuntimeFile('current', rel.version)
+    } catch (e) {
+      fs.rmSync(part, { recursive: true, force: true })
+      this.busy = null
+      const msg = String((e as Error)?.message ?? e)
+      logger.error({ mod: 'update', to: rel.version, err: msg }, `update to ${rel.version} failed, previous version kept`)
+      await this.skip(rel.version)
+      await this.setResult(false, `Update to ${rel.version} failed: ${msg}`)
+      throw new AppError('UPDATE_FAILED', 'The update failed; the previous version is still installed', 500)
+    } finally {
+      fs.rmSync(file, { force: true })
+    }
+    await setSetting(this.h, 'update_state', JSON.stringify({ from: VERSION, fromSha: VERSION, to: rel.version, at: Date.now(), boots: 0, healthy: false } satisfies UpdateState))
     await this.setResult(true, `Updated from ${VERSION} to ${rel.version}`)
     logger.info({ mod: 'update', to: rel.version }, `version ${rel.version} installed, restarting`)
     this.busy = null

@@ -1,0 +1,46 @@
+# Builds the WhatsOps packages for every system and attaches them to the release.
+# Runs by itself when a release is published; can be re-run by hand for an existing tag.
+name: Packages
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v1.4.0)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15-intel, platform: macos, arch: x64 }
+          - { runner: macos-15, platform: macos, arch: arm64 }
+          - { runner: windows-2022, platform: windows, arch: x64 }
+          - { runner: ubuntu-22.04, platform: linux, arch: x64 }
+          - { runner: ubuntu-22.04-arm, platform: linux, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - run: npm prune --omit=dev --no-audit --no-fund
+      - run: node packaging/build.mjs ${{ matrix.platform }} ${{ matrix.arch }}
+      - name: Attach to the release
+        shell: bash
+        run: gh release upload "$TAG" out/upload/* --clobber --repo "$GITHUB_REPOSITORY"

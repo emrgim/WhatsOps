@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import fs from 'node:fs'
 import { config, currentDbUrl, ensureDataDir, readBootstrap, writeBootstrap } from './config.js'
 import { getSetting, maskDbUrl, migrate, now, openDb, parseDbUrl, pingDb } from './db/index.js'
 import { AdminAuth, ApiKeys } from './security/auth.js'
@@ -41,9 +42,14 @@ async function run() {
       await import('./stdio.js')
       return
     case 'login-link': {
+      // --local: link to this computer (the app launchers); --out FILE: write it to a file instead of printing it
       await withDb(async (h) => {
         const t = await new AdminAuth(h).createLoginToken('link', Number(arg('minutes', '30')) * 60_000)
-        console.log(`${await publicUrl(h)}/login?t=${t}`)
+        const base = rest.includes('--local') ? `http://127.0.0.1:${config.port}` : await publicUrl(h)
+        const url = `${base}/login?t=${t}`
+        const out = arg('out')
+        if (out) fs.writeFileSync(out, url, { mode: 0o600 })
+        else console.log(url)
       })
       return
     }

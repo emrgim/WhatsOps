@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 
-export const VERSION = '1.3.1'
+export const VERSION = '1.4.0'
 
 function env(name: string, def = ''): string {
   const v = process.env[name]
@@ -11,6 +11,7 @@ function env(name: string, def = ''): string {
 
 function defaultDataDir(): string {
   if (process.platform === 'darwin') return path.join(os.homedir(), 'Library/Application Support/mcp-mrg-whatsops')
+  if (process.platform === 'win32') return path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'mcp-mrg-whatsops')
   return path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'mcp-mrg-whatsops')
 }
 
