@@ -14,7 +14,7 @@
  * pages of max 100. Webhooks have no signature: the target URL carries a random secret.
  */
 import crypto from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { generateMessageIDV2 } from '@whiskeysockets/baileys'
@@ -22,7 +22,11 @@ import { getSetting, now, setSetting } from '../db/index.js'
 import type { WaEvent } from '../events.js'
 import { logger } from '../log.js'
 import { AppError, toJid, userOf } from '../util.js'
-import type { App } from '../app.js'
+import { authenticate, requireScope, type App } from '../app.js'
+import { publicOrigin, requestIp, sha256, type Principal } from '../security/auth.js'
+import { reqLang, tr, type Lang } from '../i18n.js'
+import { phoneDigits, pluginAccess, type User } from '../users.js'
+import { joinPage, messagePage } from '../ui/pages.js'
 import type { WaAccount } from '../wa/account.js'
 
 export const PLUGIN_ID = 'currentrms'
@@ -40,11 +44,13 @@ export type CrmsConfig = {
   mode: 'groups' | 'community'
   whatsappField: string // Member custom field (document_layout_name) holding the WhatsApp number
   inviteFallback: boolean // send the invite link privately to people who can't be added
+  ownerAdmin: boolean // the owner of the record in Current RMS (a user with a registered number) is admin of its groups
+  backupAccount: string // second WhatsOps number: admin of every group and Community, takes over if the main one is offline
   hookSecret: string
   hooks: { id: number; event: string }[]
   hooksError: string | null
 }
-const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, hookSecret: '', hooks: [], hooksError: null }
+const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, ownerAdmin: true, backupAccount: '', hookSecret: '', hooks: [], hooksError: null }
 
 type Participant = { memberId: number; name: string; whatsapp: string | null }
 type DiscRow = {
@@ -63,6 +69,40 @@ type DiscRow = {
   error: string | null
   synced_comment_id: number | null
   created_at: number | null
+  owner_member_id: string | null
+  admins: string | null
+}
+type CrmsUserRow = {
+  member_id: string
+  name: string | null
+  email: string | null
+  phone: string | null
+  verified_at: number | null
+  invite_hash: string | null
+  invite_expires: number | null
+  code_hash: string | null
+  code_phone: string | null
+  code_expires: number | null
+  code_tries: number | null
+  sends: string | null
+  created_at: number | null
+}
+type RmsUser = { name: string; email: string | null; whatsapp: string | null }
+/** What a caller may see and switch: null = everything; otherwise only the records owned by that Current RMS user. */
+export type Scope = { member: string | null } | null
+const INVITE_DAYS = 14
+const mask = (d: string | null | undefined) => (d ? `+${d.slice(0, 2)} ••• ${d.slice(-4)}` : null)
+
+/** Who must be added to a group and who promoted to admin, given the group's participants. */
+export function planAdmins(participants: { id: string; phoneNumber?: string; admin?: string | null }[], phones: string[]): { add: string[]; promote: string[] } {
+  const add: string[] = []
+  const promote: string[] = []
+  for (const ph of phones) {
+    const p = participants.find((x) => userOf(x.phoneNumber ?? '') === ph || (x.id.endsWith('@s.whatsapp.net') && userOf(x.id) === ph))
+    if (!p) add.push(ph)
+    else if (!p.admin) promote.push(p.id)
+  }
+  return { add, promote }
 }
 
 /** Discussable types → API collection, name field, path in the web app, short label. */
@@ -117,6 +157,10 @@ export class CurrentRmsPlugin {
   private refreshing: Promise<void> | null = null
   lastRefresh = 0
   lastPoll = 0
+  private rmsUsers = new Map<string, RmsUser>() // Current RMS users (membership type User) by member id
+  private usersAt = 0
+  private adminQueue = new Set<string>()
+  private adminRunning = false
 
   constructor(private app: App) {}
 
@@ -151,14 +195,19 @@ export class CurrentRmsPlugin {
     return { ...rest, apiKeySet: !!apiKey, hookUrl: hookSecret ? `/plugins/${PLUGIN_ID}/hook/${hookSecret}` : null }
   }
 
-  async updateConfig(p: Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback'>>): Promise<void> {
+  async updateConfig(p: Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback' | 'ownerAdmin' | 'backupAccount'>>): Promise<void> {
+    const before = `${this.cfg.ownerAdmin}|${this.cfg.backupAccount}|${this.cfg.account}`
     if (p.subdomain !== undefined) this.cfg.subdomain = p.subdomain.trim().replace(/^https?:\/\//, '').replace(/\.current-rms\.com.*$/, '').toLowerCase()
     if (p.apiKey) this.cfg.apiKey = p.apiKey.trim()
     if (p.account !== undefined) this.cfg.account = p.account
     if (p.mode) this.cfg.mode = p.mode === 'community' ? 'community' : 'groups'
     if (p.whatsappField !== undefined) this.cfg.whatsappField = p.whatsappField
     if (p.inviteFallback !== undefined) this.cfg.inviteFallback = !!p.inviteFallback
+    if (p.ownerAdmin !== undefined) this.cfg.ownerAdmin = !!p.ownerAdmin
+    if (p.backupAccount !== undefined) this.cfg.backupAccount = p.backupAccount
     await this.save()
+    // new backup number or owner rule: bring the existing groups in line, one at a time
+    if (before !== `${this.cfg.ownerAdmin}|${this.cfg.backupAccount}|${this.cfg.account}`) this.queueAdmins(await this.syncedIds())
   }
 
   // ------------------------------------------------------------------ Current RMS API
@@ -253,6 +302,7 @@ export class CurrentRmsPlugin {
           byType.get(d.discussable_type)!.add(d.discussable_id)
         }
         const names = new Map<string, string>()
+        const owners = new Map<string, string>() // record → owner user (member id)
         for (const [type, ids] of byType) {
           const t = TYPES[type]
           if (!t) continue
@@ -261,7 +311,10 @@ export class CurrentRmsPlugin {
             const q = arr.slice(i, i + 50).map((id) => `q[id_in][]=${id}`).join('&')
             try {
               const rows = await this.all<Record<string, unknown>>(`/${t.coll}?${q}`, t.coll, 1)
-              for (const r of rows) names.set(`${type}:${r.id}`, String(r[t.name] ?? r.name ?? r.subject ?? `#${r.id}`))
+              for (const r of rows) {
+                names.set(`${type}:${r.id}`, String(r[t.name] ?? r.name ?? r.subject ?? `#${r.id}`))
+                if (r.owned_by != null && r.owned_by !== '') owners.set(`${type}:${r.id}`, String(r.owned_by))
+              }
             } catch (e) {
               logger.debug({ mod: 'currentrms', type, err: String(e) }, 'record names not readable')
             }
@@ -279,7 +332,9 @@ export class CurrentRmsPlugin {
             logger.debug({ mod: 'currentrms', err: String(e) }, 'participants not readable')
           }
         }
+        await this.loadUsers(true).catch((e) => logger.debug({ mod: 'currentrms', err: String(e) }, 'users not readable'))
         const have = new Map(((await this.app.h.db.selectFrom('crms_discussions').selectAll().execute()) as DiscRow[]).map((r) => [r.id, r]))
+        const ownerChanged: string[] = []
         for (const d of list) {
           const id = String(d.id)
           const cur = have.get(id)
@@ -294,11 +349,14 @@ export class CurrentRmsPlugin {
             reply_count: d.reply_count ?? null,
             last_comment_id: d.last_comment_id ?? null,
             last_at: Date.parse(d.updated_at ?? d.created_at ?? '') || null,
+            owner_member_id: owners.get(`${d.discussable_type}:${d.discussable_id}`) ?? cur?.owner_member_id ?? null,
           }
+          if (cur?.sync && cur.group_jid && row.owner_member_id !== cur.owner_member_id) ownerChanged.push(id)
           if (cur) await this.app.h.db.updateTable('crms_discussions').set(row).where('id', '=', id).execute()
           else await this.app.h.db.insertInto('crms_discussions').values({ ...row, id, sync: 0, state: 'off', group_jid: null, error: null, synced_comment_id: null, created_at: now() }).execute()
         }
         this.lastRefresh = Date.now()
+        if (ownerChanged.length) this.queueAdmins(ownerChanged)
         logger.info({ mod: 'currentrms', discussions: list.length }, `discussions read from Current RMS: ${list.length}`)
       } finally {
         this.refreshing = null
@@ -308,15 +366,20 @@ export class CurrentRmsPlugin {
   }
 
   /** Records → discussions, for the plugin page / API / MCP. */
-  async tree(q?: string) {
+  async tree(q?: string, scope: Scope = null) {
     const rows = (await this.app.h.db.selectFrom('crms_discussions').selectAll().execute()) as DiscRow[]
+    const registered = new Set(((await this.app.h.db.selectFrom('crms_users').select(['member_id', 'phone', 'verified_at']).execute()) as CrmsUserRow[]).filter((u) => u.phone && u.verified_at).map((u) => u.member_id))
     const needle = (q ?? '').trim().toLowerCase()
-    const groups = new Map<string, { type: string; id: string; name: string; url: string; discussions: unknown[]; last: number }>()
+    type Rec = { type: string; id: string; name: string; url: string; owner: { id: string; name: string; whatsapp: boolean } | null; discussions: unknown[]; last: number }
+    const groups = new Map<string, Rec>()
     for (const r of rows) {
+      if (!this.inScope(r, scope)) continue
       const name = r.object_name || `${r.object_type} #${r.object_id}`
       if (needle && !`${name} ${r.subject ?? ''}`.toLowerCase().includes(needle)) continue
       const k = `${r.object_type}:${r.object_id}`
-      if (!groups.has(k)) groups.set(k, { type: r.object_type, id: r.object_id, name, url: this.webUrl(r.object_type, r.object_id), discussions: [], last: 0 })
+      const ou = r.owner_member_id ? this.rmsUsers.get(r.owner_member_id) : undefined
+      const owner = r.owner_member_id ? { id: r.owner_member_id, name: ou?.name || `#${r.owner_member_id}`, whatsapp: registered.has(r.owner_member_id) || !!ou?.whatsapp } : null
+      if (!groups.has(k)) groups.set(k, { type: r.object_type, id: r.object_id, name, url: this.webUrl(r.object_type, r.object_id), owner, discussions: [], last: 0 })
       const g = groups.get(k)!
       const parts = JSON.parse(r.participants || '[]') as Participant[]
       g.discussions.push({
@@ -346,10 +409,61 @@ export class CurrentRmsPlugin {
     return next
   }
 
-  private account(): WaAccount {
-    const acc = this.app.accounts.get(this.cfg.account || undefined)
-    acc.requireOpen()
-    return acc
+  /** The number that creates the groups (the default one unless set in the plugin). */
+  private mainAcc(): WaAccount {
+    return this.app.accounts.get(this.cfg.account || undefined)
+  }
+
+  /** The backup number (second admin), if set and different from the main one. */
+  private backupAcc(): WaAccount | null {
+    if (!this.cfg.backupAccount) return null
+    try {
+      const b = this.app.accounts.get(this.cfg.backupAccount)
+      return b.row.id === this.mainAcc().row.id ? null : b
+    } catch {
+      return null
+    }
+  }
+
+  /** The number that carries the sync now: the main one, or the backup while the main one is offline. */
+  private activeAcc(): WaAccount {
+    const main = this.mainAcc()
+    if (main.state === 'open') return main
+    const b = this.backupAcc()
+    if (b && b.state === 'open') return b
+    main.requireOpen()
+    return main
+  }
+
+  private activeId(): string | null {
+    try {
+      return this.activeAcc().row.id
+    } catch {
+      return null
+    }
+  }
+
+  private static phoneOf(a: WaAccount | null): string {
+    return a ? userOf(a.row.me_jid ?? '') || a.row.phone || '' : ''
+  }
+
+  /** Records a user may see and switch: null = all of them. */
+  scopeOf(p: Principal): Scope {
+    if (p.kind !== 'user') return null
+    const pp = pluginAccess(p.user, PLUGIN_ID)
+    if (pp?.scope === 'all') return null
+    const src = p.user?.source ?? ''
+    return { member: src.startsWith(`${PLUGIN_ID}:`) ? src.slice(PLUGIN_ID.length + 1) : null }
+  }
+
+  private inScope(r: DiscRow, scope: Scope): boolean {
+    return !scope || (!!scope.member && r.owner_member_id === scope.member)
+  }
+
+  private async syncedIds(ownerMemberId?: string): Promise<string[]> {
+    let q = this.app.h.db.selectFrom('crms_discussions').select('id').where('sync', '=', 1).where('group_jid', 'is not', null)
+    if (ownerMemberId) q = q.where('owner_member_id', '=', ownerMemberId)
+    return ((await q.execute()) as { id: string }[]).map((r) => r.id)
   }
 
   private async row(id: string): Promise<DiscRow> {
@@ -362,14 +476,17 @@ export class CurrentRmsPlugin {
     await this.app.h.db.updateTable('crms_discussions').set(set).where('id', '=', id).execute()
   }
 
-  async setSync(id: string, on: boolean): Promise<unknown> {
+  async setSync(id: string, on: boolean, scope: Scope = null): Promise<unknown> {
     const r = await this.row(id)
+    if (!this.inScope(r, scope)) throw new AppError('CRMS_NOT_YOURS', 'You can only manage the discussions of the records you own', 403)
     if (!on) {
       await this.setRow(id, { sync: 0, state: r.group_jid ? 'paused' : 'off' })
       logger.info({ mod: 'currentrms', discussion: id }, 'sync off')
       return (await this.tree()).flatMap((g) => g.discussions).find((d) => (d as { id: string }).id === id)
     }
-    this.account() // fail fast when WhatsApp is not connected
+    // fail fast when WhatsApp is not connected (new groups are created only by the main number)
+    if (r.group_jid) this.activeAcc()
+    else this.mainAcc().requireOpen()
     await this.setRow(id, { sync: 1, state: r.group_jid ? 'on' : 'creating', error: null })
     void this.lock(id, () => this.activate(id)).catch(async (e) => {
       const msg = e instanceof AppError ? e.message : String((e as Error)?.message ?? e)
@@ -427,7 +544,7 @@ export class CurrentRmsPlugin {
   private async activate(id: string): Promise<void> {
     const r = await this.row(id)
     if (!r.sync) return
-    const acc = this.account()
+    const acc = r.group_jid ? this.activeAcc() : this.mainAcc()
     const sock = acc.requireOpen()
     const me = userOf(acc.row.me_jid ?? '')
     const parts = await this.participants(id)
@@ -458,17 +575,10 @@ export class CurrentRmsPlugin {
     if (jids.length) {
       const res = await sock.groupParticipantsUpdate(group, jids, 'add').catch(() => [] as { status: string; jid?: string }[])
       const refused = res.filter((x) => x.status === '403' || x.status === '408').map((x) => x.jid).filter(Boolean) as string[]
-      if (refused.length && this.cfg.inviteFallback) {
-        const code = await sock.groupInviteCode(group).catch(() => null)
-        if (code) {
-          for (const j of refused) {
-            await acc
-              .sendRaw(j, { text: `${(r.subject || r.object_name || '').trim()}\nhttps://chat.whatsapp.com/${code}` })
-              .catch(() => undefined)
-          }
-        }
-      }
+      await this.sendInvites(acc, group, r, refused)
     }
+    // the record's owner and the backup number become admins
+    await this.ensureAdminsNow(id).catch((e) => logger.warn({ mod: 'currentrms', discussion: id, err: String((e as Error)?.message ?? e) }, 'group admins not set'))
     // the whole discussion so far, grouped by day, in few messages
     if (!r.synced_comment_id) {
       const list = await this.comments(id)
@@ -488,7 +598,7 @@ export class CurrentRmsPlugin {
     const k = `${r.object_type}:${r.object_id}`
     const have = (await this.app.h.db.selectFrom('crms_objects').selectAll().where('key', '=', k).executeTakeFirst()) as { community_jid: string } | undefined
     if (have?.community_jid) return have.community_jid
-    const sock = this.account().requireOpen()
+    const sock = this.mainAcc().requireOpen()
     await this.paceGroups()
     const name = clip(`${TYPES[r.object_type]?.short ? TYPES[r.object_type].short + ' ' : ''}${r.object_name || '#' + r.object_id}`, 100)
     const meta = await sock.communityCreate(name, `${this.webUrl(r.object_type, r.object_id)}\nCurrent RMS ⇄ WhatsApp (WhatsOps)`)
@@ -498,6 +608,223 @@ export class CurrentRmsPlugin {
     await this.app.h.db.insertInto('crms_objects').values({ key: k, community_jid: meta.id, name, created_at: now() }).execute()
     logger.info({ mod: 'currentrms', object: k }, 'WhatsApp community created')
     return meta.id
+  }
+
+  private async communityJidOf(r: DiscRow): Promise<string | null> {
+    const have = (await this.app.h.db.selectFrom('crms_objects').select('community_jid').where('key', '=', `${r.object_type}:${r.object_id}`).executeTakeFirst()) as { community_jid: string | null } | undefined
+    return have?.community_jid ?? null
+  }
+
+  /** Invite link, privately, to people WhatsApp did not let us add (their privacy settings). */
+  private async sendInvites(acc: WaAccount, group: string, r: DiscRow, jids: string[]): Promise<void> {
+    if (!jids.length || !this.cfg.inviteFallback) return
+    const code = await acc.requireOpen().groupInviteCode(group).catch(() => null)
+    if (!code) return
+    for (const j of jids) await acc.sendRaw(j, { text: `${(r.subject || r.object_name || '').trim()}\nhttps://chat.whatsapp.com/${code}` }).catch(() => undefined)
+  }
+
+  /**
+   * Admins of a synced group (and of its Community): the owner of the record in Current RMS, when
+   * they have a registered number, and the backup number. The main number created the group and
+   * stays its creator. Missing people are added first; nobody is ever demoted.
+   */
+  private async ensureAdminsNow(id: string): Promise<void> {
+    const r = await this.row(id)
+    if (!r.sync || !r.group_jid) return
+    const acc = this.activeAcc()
+    const sock = acc.requireOpen()
+    const me = CurrentRmsPlugin.phoneOf(acc)
+    const want = new Map<string, 'main' | 'backup' | 'owner'>()
+    const main = this.mainAcc()
+    if (acc !== main && CurrentRmsPlugin.phoneOf(main)) want.set(CurrentRmsPlugin.phoneOf(main), 'main')
+    const backup = CurrentRmsPlugin.phoneOf(this.backupAcc())
+    if (backup) want.set(backup, 'backup')
+    const owner = this.cfg.ownerAdmin && r.owner_member_id ? await this.userPhone(r.owner_member_id) : null
+    if (owner) want.set(owner, 'owner')
+    want.delete(me)
+    if (want.size) {
+      const phones = [...want.keys()]
+      // the group first (adding someone to a Community group also makes them a Community member)
+      const g = await sock.groupMetadata(r.group_jid)
+      const plan = planAdmins(g.participants, phones)
+      const promote = [...plan.promote]
+      if (plan.add.length) {
+        const res = await sock.groupParticipantsUpdate(r.group_jid, plan.add.map((p) => toJid(p)), 'add').catch(() => [] as { status: string; jid?: string }[])
+        for (const x of res) if ((x.status === '200' || x.status === '409') && x.jid) promote.push(x.jid)
+        await this.sendInvites(acc, r.group_jid, r, res.filter((x) => x.status === '403' || x.status === '408').map((x) => x.jid).filter(Boolean) as string[])
+      }
+      if (promote.length) await sock.groupParticipantsUpdate(r.group_jid, promote, 'promote')
+      const community = this.cfg.mode === 'community' ? await this.communityJidOf(r) : null
+      if (community) {
+        const c = await sock.groupMetadata(community)
+        const cp = planAdmins(c.participants, phones)
+        const cpromote = [...cp.promote, ...cp.add.map((p) => toJid(p))]
+        if (cpromote.length) await sock.communityParticipantsUpdate(community, cpromote, 'promote').catch((e) => logger.debug({ mod: 'currentrms', err: String(e) }, 'community admins not set yet'))
+      }
+    }
+    await this.setRow(id, { admins: JSON.stringify([...want].map(([phone, role]) => ({ phone, role }))) })
+  }
+
+  /** Bring groups in line in the background, one at a time, with a pause between them. */
+  private queueAdmins(ids: string[]): void {
+    for (const id of ids) this.adminQueue.add(id)
+    if (this.adminRunning || !this.adminQueue.size) return
+    this.adminRunning = true
+    void (async () => {
+      try {
+        while (this.adminQueue.size) {
+          const id = this.adminQueue.values().next().value as string
+          this.adminQueue.delete(id)
+          await this.lock(id, () => this.ensureAdminsNow(id)).catch((e) => logger.warn({ mod: 'currentrms', discussion: id, err: String((e as Error)?.message ?? e) }, 'group admins not updated'))
+          await sleep(3000)
+        }
+      } finally {
+        this.adminRunning = false
+      }
+    })()
+  }
+
+  // ------------------------------------------------------------------ Current RMS users
+  /** Users of Current RMS (membership type User) with the WhatsApp number of the custom field. */
+  private async loadUsers(force = false): Promise<void> {
+    if (!force && this.rmsUsers.size && Date.now() - this.usersAt < 10 * 60_000) return
+    type M = { id: number; name?: string; membership_type?: string; active?: boolean; email?: string; primary_email?: string | null; emails?: { address?: string }[]; custom_fields?: Record<string, unknown> }
+    const list = await this.all<M>('/members?q[membership_type_eq]=User', 'members', 5)
+    const map = new Map<string, RmsUser>()
+    for (const m of list) {
+      if ((m.membership_type && m.membership_type !== 'User') || m.active === false) continue
+      map.set(String(m.id), { name: m.name ?? '', email: m.email ?? m.primary_email ?? m.emails?.[0]?.address ?? null, whatsapp: this.waNumber(m.custom_fields) })
+    }
+    this.rmsUsers = map
+    this.usersAt = Date.now()
+  }
+
+  /** A user's WhatsApp number: the one they confirmed with their invite link, else the custom field. */
+  private async userPhone(memberId: string): Promise<string | null> {
+    const u = (await this.app.h.db.selectFrom('crms_users').select(['phone', 'verified_at']).where('member_id', '=', memberId).executeTakeFirst()) as CrmsUserRow | undefined
+    if (u?.phone && u.verified_at) return u.phone
+    await this.loadUsers().catch(() => undefined)
+    return this.rmsUsers.get(memberId)?.whatsapp ?? null
+  }
+
+  async users() {
+    await this.loadUsers(true)
+    const local = new Map(((await this.app.h.db.selectFrom('crms_users').selectAll().execute()) as CrmsUserRow[]).map((u) => [u.member_id, u]))
+    const rows = (await this.app.h.db.selectFrom('crms_discussions').select(['object_type', 'object_id', 'owner_member_id', 'sync']).execute()) as DiscRow[]
+    const wo = new Map((await this.app.users.list()).filter((u) => u.source?.startsWith(`${PLUGIN_ID}:`)).map((u) => [u.source!.slice(PLUGIN_ID.length + 1), u]))
+    const out = []
+    for (const [id, u] of this.rmsUsers) {
+      const l = local.get(id)
+      const mine = rows.filter((r) => r.owner_member_id === id)
+      const w = wo.get(id)
+      const verified = !!(l?.phone && l.verified_at)
+      out.push({
+        id,
+        name: u.name,
+        email: u.email,
+        phone: verified ? l!.phone : u.whatsapp,
+        phoneSource: verified ? 'confirmed' : u.whatsapp ? 'currentrms' : null,
+        confirmedAt: verified ? new Date(l!.verified_at!).toISOString() : null,
+        records: new Set(mine.map((r) => `${r.object_type}:${r.object_id}`)).size,
+        synced: mine.filter((r) => r.sync).length,
+        invite: l?.invite_expires && l.invite_expires > now() ? { expiresAt: new Date(l.invite_expires).toISOString() } : null,
+        access: w ? { userId: w.id, active: w.active, ...(w.perms.plugins[PLUGIN_ID] ?? { access: false, scope: 'owned', manage: false }), lastLogin: w.lastLogin ? new Date(w.lastLogin).toISOString() : null } : null,
+      })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  /** Personal link (14 days) where a Current RMS user registers their WhatsApp number. A new link cancels the old one. */
+  async invite(memberId: string, origin: string) {
+    await this.loadUsers()
+    const u = this.rmsUsers.get(memberId)
+    if (!u) throw new AppError('CRMS_NO_USER', 'Current RMS user {0} not found', 404, [memberId])
+    const token = crypto.randomBytes(24).toString('base64url')
+    const expires = now() + INVITE_DAYS * 86400_000
+    const have = await this.app.h.db.selectFrom('crms_users').select('member_id').where('member_id', '=', memberId).executeTakeFirst()
+    if (have) await this.app.h.db.updateTable('crms_users').set({ name: u.name, email: u.email, invite_hash: sha256(token), invite_expires: expires }).where('member_id', '=', memberId).execute()
+    else await this.app.h.db.insertInto('crms_users').values({ member_id: memberId, name: u.name, email: u.email, phone: null, verified_at: null, invite_hash: sha256(token), invite_expires: expires, code_hash: null, code_phone: null, code_expires: null, code_tries: 0, sends: '[]', created_at: now() }).execute()
+    logger.info({ mod: 'currentrms', user: memberId }, `invite link created for ${u.name}`)
+    return { user: memberId, name: u.name, url: `${origin}/join/${PLUGIN_ID}/${token}`, expiresAt: new Date(expires).toISOString() }
+  }
+
+  async removePhone(memberId: string): Promise<void> {
+    await this.app.h.db.updateTable('crms_users').set({ phone: null, verified_at: null }).where('member_id', '=', memberId).execute()
+    const w = await this.app.users.bySource(`${PLUGIN_ID}:${memberId}`)
+    if (w) await this.app.users.update(w.id, { phone: this.rmsUsers.get(memberId)?.whatsapp ?? null }).catch(() => undefined)
+  }
+
+  /**
+   * Access of a Current RMS user to WhatsOps (owner only): on/off, which records (only theirs or all),
+   * and whether they manage the plugin. Creates the WhatsOps user the first time.
+   */
+  async setAccess(memberId: string, p: { access?: boolean; scope?: 'owned' | 'all'; manage?: boolean }): Promise<User | null> {
+    await this.loadUsers()
+    const ru = this.rmsUsers.get(memberId)
+    if (!ru) throw new AppError('CRMS_NO_USER', 'Current RMS user {0} not found', 404, [memberId])
+    const src = `${PLUGIN_ID}:${memberId}`
+    const phone = await this.userPhone(memberId)
+    let u = await this.app.users.bySource(src)
+    if (!u) {
+      if (!p.access) return null
+      u = await this.app.users.create({ name: ru.name || `#${memberId}`, phone, source: src, perms: { plugins: { [PLUGIN_ID]: { access: true, scope: p.scope ?? 'owned', manage: !!p.manage } } } })
+    } else {
+      if (phone && u.phone !== phone) u = await this.app.users.update(u.id, { phone })
+      if (p.access && !u.active) u = await this.app.users.update(u.id, { active: true })
+      u = await this.app.users.setPluginPerms(u.id, PLUGIN_ID, { ...(p.access !== undefined ? { access: p.access } : {}), ...(p.scope ? { scope: p.scope } : {}), ...(p.manage !== undefined ? { manage: p.manage } : {}) })
+    }
+    logger.info({ mod: 'currentrms', user: memberId, access: u.perms.plugins[PLUGIN_ID] }, `access of ${u.name} changed`)
+    return u
+  }
+
+  // ---- the invite page
+  private async byToken(token: string): Promise<CrmsUserRow | null> {
+    if (!/^[A-Za-z0-9_-]{20,64}$/.test(token)) return null
+    const u = (await this.app.h.db.selectFrom('crms_users').selectAll().where('invite_hash', '=', sha256(token)).executeTakeFirst()) as CrmsUserRow | undefined
+    return u && u.invite_expires && u.invite_expires > now() ? u : null
+  }
+
+  async joinInfo(token: string) {
+    const u = await this.byToken(token)
+    return u ? { name: u.name || '', company: this.cfg.subdomain, phone: u.verified_at ? mask(u.phone) : null } : null
+  }
+
+  async joinSendCode(token: string, phoneIn: string, lang: Lang) {
+    const u = await this.byToken(token)
+    if (!u) throw new AppError('CRMS_JOIN_INVALID', 'This link is not valid or has expired. Ask for a new one.', 404)
+    const d = phoneDigits(phoneIn)
+    if (d.length < 8 || d.length > 15) throw new AppError('INVALID_PHONE', 'Write the full number with the country code, e.g. +39 333 123 4567', 400)
+    const sends = (JSON.parse(u.sends || '[]') as number[]).filter((t) => now() - t < 3600_000)
+    if (sends.length >= 5) throw new AppError('TOO_MANY_REQUESTS', 'Too many codes requested, wait a few minutes', 429)
+    const acc = this.activeAcc()
+    const chk = await acc.checkNumber(d)
+    if (!chk.exists || !chk.jid) throw new AppError('CRMS_JOIN_NOWA', '{0} is not on WhatsApp', 400, ['+' + d])
+    const phone = phoneDigits(chk.phone) || d
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0')
+    await acc.sendRaw(chk.jid, { text: tr(lang, '@crms_code', [code, `${this.cfg.subdomain}.current-rms.com`]) })
+    await this.app.h.db
+      .updateTable('crms_users')
+      .set({ code_hash: sha256(`${u.member_id}:${code}`), code_phone: phone, code_expires: now() + 10 * 60_000, code_tries: 0, sends: JSON.stringify([...sends, now()]) })
+      .where('member_id', '=', u.member_id)
+      .execute()
+    return { sentTo: mask(phone) }
+  }
+
+  async joinVerify(token: string, codeIn: string): Promise<{ phone: string | null; memberId: string }> {
+    const u = await this.byToken(token)
+    if (!u) throw new AppError('CRMS_JOIN_INVALID', 'This link is not valid or has expired. Ask for a new one.', 404)
+    if (!u.code_hash || !u.code_expires || u.code_expires < now()) throw new AppError('INVALID_CODE', 'Wrong or expired code', 400)
+    if ((u.code_tries ?? 0) >= 5) throw new AppError('TOO_MANY_ATTEMPTS', 'Too many failed attempts, try again in a few minutes', 429)
+    if (sha256(`${u.member_id}:${codeIn.replace(/\D+/g, '')}`) !== u.code_hash) {
+      await this.app.h.db.updateTable('crms_users').set({ code_tries: (u.code_tries ?? 0) + 1 }).where('member_id', '=', u.member_id).execute()
+      throw new AppError('INVALID_CODE', 'Wrong or expired code', 400)
+    }
+    await this.app.h.db.updateTable('crms_users').set({ phone: u.code_phone, verified_at: now(), code_hash: null, code_phone: null, code_expires: null, code_tries: 0 }).where('member_id', '=', u.member_id).execute()
+    const w = await this.app.users.bySource(`${PLUGIN_ID}:${u.member_id}`)
+    if (w && w.phone !== u.code_phone) await this.app.users.update(w.id, { phone: u.code_phone }).catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'user number not updated'))
+    logger.info({ mod: 'currentrms', user: u.member_id }, `${u.name ?? u.member_id} registered a WhatsApp number`)
+    if (this.cfg.ownerAdmin) this.queueAdmins(await this.syncedIds(u.member_id))
+    return { phone: mask(u.code_phone), memberId: u.member_id }
   }
 
   private historyChunks(list: RawComment[], r: DiscRow): { text: string; ids: number[] }[] {
@@ -552,7 +879,7 @@ export class CurrentRmsPlugin {
     return this.lock(id, async () => {
       const r = await this.row(id)
       if (!r.sync || !r.group_jid || r.synced_comment_id == null) return 0
-      const acc = this.account()
+      const acc = this.activeAcc()
       const list = (await this.comments(id)).filter((c) => c.id > (r.synced_comment_id ?? 0))
       let n = 0
       for (const c of list) {
@@ -628,8 +955,18 @@ export class CurrentRmsPlugin {
 
   // ------------------------------------------------------------------ WhatsApp → Current
   private async onWhatsApp(ev: WaEvent): Promise<void> {
-    if (ev.type !== 'message.received' && ev.type !== 'message.sent') return
     if (!this.configured()) return
+    // the same group is seen by the main and the backup number: only the one carrying the sync counts
+    if (ev.account !== this.activeId()) return
+    if (ev.type === 'group.participants') {
+      // someone joined (e.g. the owner through the invite link): make them admin if they should be
+      const d = ev.data as { group?: string; action?: string }
+      if (d?.action !== 'add' || !d.group) return
+      const r = (await this.app.h.db.selectFrom('crms_discussions').select(['id', 'sync']).where('group_jid', '=', d.group).executeTakeFirst()) as { id: string; sync: number } | undefined
+      if (r?.sync) this.queueAdmins([r.id])
+      return
+    }
+    if (ev.type !== 'message.received' && ev.type !== 'message.sent') return
     const m = ev.data as { id: string; chat: string; fromMe: boolean; senderName?: string | null; senderPhone?: string | null; text?: string | null; type: string; hasMedia?: boolean; upsertType?: string }
     if (!m?.chat?.endsWith('@g.us') || m.upsertType === 'append') return
     if (this.ownSent.has(m.id)) return
@@ -641,7 +978,12 @@ export class CurrentRmsPlugin {
     await this.lock(r.id, async () => {
       const parts = JSON.parse(r.participants || '[]') as Participant[]
       const phone = String(m.senderPhone ?? '').replace(/\D+/g, '')
-      const member = !m.fromMe && phone ? parts.find((p) => p.whatsapp === phone) : undefined
+      let member: { memberId: number } | undefined = !m.fromMe && phone ? parts.find((p) => p.whatsapp === phone) : undefined
+      if (!member && !m.fromMe && phone) {
+        // a Current RMS user who registered this number (e.g. the record's owner)
+        const u = (await this.app.h.db.selectFrom('crms_users').select('member_id').where('phone', '=', phone).where('verified_at', 'is not', null).executeTakeFirst()) as { member_id: string } | undefined
+        if (u) member = { memberId: Number(u.member_id) }
+      }
       const label = `${m.senderName || (phone ? '+' + phone : '?')} (WhatsApp)`
       let created: { comment?: { id: number } } | null = null
       if (member) {
@@ -664,22 +1006,49 @@ export class CurrentRmsPlugin {
     return !!this.refreshing
   }
 
-  status() {
-    return { configured: this.configured(), config: this.publicConfig(), refreshing: this.isRefreshing, lastRefresh: this.lastRefresh || null, lastPoll: this.lastPoll || null }
+  status(p?: Principal) {
+    const base = { configured: this.configured(), refreshing: this.isRefreshing, lastRefresh: this.lastRefresh || null, lastPoll: this.lastPoll || null }
+    if (p?.kind === 'user') {
+      // a user who doesn't manage the plugin sees no connection details
+      const pp = pluginAccess(p.user, PLUGIN_ID)
+      const scope = this.scopeOf(p)
+      return { ...base, ...(pp?.manage ? { config: this.publicConfig() } : { config: { subdomain: this.cfg.subdomain, mode: this.cfg.mode } }), me: { manage: !!pp?.manage, scope: pp?.scope ?? 'owned', member: scope?.member ?? null } }
+    }
+    return { ...base, config: this.publicConfig() }
   }
 }
 
 // ---------------------------------------------------------------------- routes
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type Guard = (scope: 'read' | 'send' | 'admin') => any
-export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: CurrentRmsPlugin, guard: Guard, tags: (t: string) => { tags: string[] }): void {
+type Need = 'view' | 'sync' | 'manage' | 'owner'
+export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: CurrentRmsPlugin, _guard: Guard, tags: (t: string) => { tags: string[] }): void {
   const f = fastify.withTypeProvider<ZodTypeProvider>()
   const T = tags('Plugins')
-  f.get(`/v1/plugins/${PLUGIN_ID}`, { preHandler: guard('admin'), schema: { ...T, summary: 'Current RMS: connection, settings, webhook state' } }, async () => plugin.status())
+  /**
+   * Owner, API keys and OAuth: by scope (view = read, sync = send, manage/owner = admin).
+   * Users: the plugin must be enabled for them; `manage` needs the plugin's manage permission;
+   * `owner` (who gets access and with which permissions) is never open to users.
+   */
+  const access = (need: Need) => async (req: FastifyRequest, reply: FastifyReply) => {
+    const p = await authenticate(app, req)
+    if (!p) {
+      reply.header('www-authenticate', app.oauth.wwwAuthenticate(req, '/v1'))
+      throw new AppError('UNAUTHORIZED', 'Missing or invalid credentials (Bearer API key, OAuth token or admin session)', 401)
+    }
+    if (p.kind === 'user') {
+      const pp = pluginAccess(p.user, PLUGIN_ID)
+      if (!pp || need === 'owner' || (need === 'manage' && !pp.manage)) throw new AppError('FORBIDDEN', 'You are not allowed to do this', 403)
+    } else requireScope(p, need === 'view' ? 'read' : need === 'sync' ? 'send' : 'admin')
+    req.principal = p
+  }
+  const P = (req: FastifyRequest) => req.principal as Principal
+
+  f.get(`/v1/plugins/${PLUGIN_ID}`, { preHandler: access('view'), schema: { ...T, summary: 'Current RMS: connection, settings, webhook state' } }, async (req) => plugin.status(P(req)))
   f.put(
     `/v1/plugins/${PLUGIN_ID}/config`,
     {
-      preHandler: guard('admin'),
+      preHandler: access('manage'),
       schema: {
         ...T,
         summary: 'Current RMS: save the connection and the plugin settings',
@@ -690,40 +1059,110 @@ export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: C
           mode: z.enum(['groups', 'community']).optional(),
           whatsappField: z.string().max(100).optional(),
           inviteFallback: z.boolean().optional(),
+          ownerAdmin: z.boolean().optional(),
+          backupAccount: z.string().max(64).optional(),
         }),
       },
     },
     async (req) => {
       await plugin.updateConfig(req.body)
-      return plugin.status()
+      return plugin.status(P(req))
     },
   )
-  f.post(`/v1/plugins/${PLUGIN_ID}/test`, { preHandler: guard('admin'), schema: { ...T, summary: 'Current RMS: test the connection' } }, async () => plugin.test())
-  f.get(`/v1/plugins/${PLUGIN_ID}/custom-fields`, { preHandler: guard('admin'), schema: { ...T, summary: 'Current RMS: custom fields of contacts (pick the WhatsApp one)' } }, async () => plugin.customFields())
-  f.post(`/v1/plugins/${PLUGIN_ID}/webhooks`, { preHandler: guard('admin'), schema: { ...T, summary: 'Current RMS: register the webhooks (new comments arrive at once)' } }, async (req) => {
-    const host = app.settings.get().publicUrl || `${req.protocol}://${req.headers['x-forwarded-host'] ?? req.headers.host}`
-    await plugin.registerHooks(String(host))
-    return plugin.status()
+  f.post(`/v1/plugins/${PLUGIN_ID}/test`, { preHandler: access('manage'), schema: { ...T, summary: 'Current RMS: test the connection' } }, async () => plugin.test())
+  f.get(`/v1/plugins/${PLUGIN_ID}/custom-fields`, { preHandler: access('manage'), schema: { ...T, summary: 'Current RMS: custom fields of contacts (pick the WhatsApp one)' } }, async () => plugin.customFields())
+  f.post(`/v1/plugins/${PLUGIN_ID}/webhooks`, { preHandler: access('manage'), schema: { ...T, summary: 'Current RMS: register the webhooks (new comments arrive at once)' } }, async (req) => {
+    await plugin.registerHooks(publicOrigin(req, app.settings.get().publicUrl))
+    return plugin.status(P(req))
   })
-  f.post(`/v1/plugins/${PLUGIN_ID}/refresh`, { preHandler: guard('admin'), schema: { ...T, summary: 'Current RMS: read the discussions again (runs in the background)' } }, async () => {
+  f.post(`/v1/plugins/${PLUGIN_ID}/refresh`, { preHandler: access('view'), schema: { ...T, summary: 'Current RMS: read the discussions again (runs in the background)' } }, async (req) => {
     const p = plugin.refresh()
     p.catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'refresh failed'))
     await Promise.race([p, new Promise((r) => setTimeout(r, 15_000))])
-    return plugin.status()
+    return plugin.status(P(req))
   })
   f.get(
     `/v1/plugins/${PLUGIN_ID}/discussions`,
-    { preHandler: guard('read'), schema: { ...T, summary: 'Current RMS: records and their discussions, with the sync state', querystring: z.object({ q: z.string().max(200).optional() }) } },
-    async (req) => plugin.tree(req.query.q),
+    { preHandler: access('view'), schema: { ...T, summary: 'Current RMS: records and their discussions, with the sync state (a user sees only what their permissions allow)', querystring: z.object({ q: z.string().max(200).optional() }) } },
+    async (req) => plugin.tree(req.query.q, plugin.scopeOf(P(req))),
   )
   f.put(
     `/v1/plugins/${PLUGIN_ID}/discussions/:id`,
     {
-      preHandler: guard('send'),
+      preHandler: access('sync'),
       schema: { ...T, summary: 'Current RMS: turn the WhatsApp sync of a discussion on or off', params: z.object({ id: z.string() }), body: z.object({ sync: z.boolean() }) },
     },
-    async (req) => plugin.setSync(req.params.id, req.body.sync),
+    async (req) => plugin.setSync(req.params.id, req.body.sync, plugin.scopeOf(P(req))),
   )
+
+  // ---- Current RMS users: their WhatsApp number (invite link) and their access to WhatsOps
+  f.get(`/v1/plugins/${PLUGIN_ID}/users`, { preHandler: access('manage'), schema: { ...T, summary: 'Current RMS: users, their WhatsApp number and their access to WhatsOps' } }, async () => plugin.users())
+  f.post(
+    `/v1/plugins/${PLUGIN_ID}/users/:id/invite`,
+    { preHandler: access('manage'), schema: { ...T, summary: 'Current RMS: personal link (14 days) where the user registers their WhatsApp number', params: z.object({ id: z.string() }) } },
+    async (req) => plugin.invite(req.params.id, publicOrigin(req, app.settings.get().publicUrl)),
+  )
+  f.delete(
+    `/v1/plugins/${PLUGIN_ID}/users/:id/phone`,
+    { preHandler: access('manage'), schema: { ...T, summary: 'Current RMS: forget the WhatsApp number a user registered', params: z.object({ id: z.string() }) } },
+    async (req) => {
+      await plugin.removePhone(req.params.id)
+      return { ok: true }
+    },
+  )
+  f.put(
+    `/v1/plugins/${PLUGIN_ID}/users/:id/access`,
+    {
+      preHandler: access('owner'),
+      schema: {
+        ...T,
+        summary: 'Current RMS: access of a user to WhatsOps — on/off, only the records they own or all, manage the plugin',
+        params: z.object({ id: z.string() }),
+        body: z.object({ access: z.boolean().optional(), scope: z.enum(['owned', 'all']).optional(), manage: z.boolean().optional() }),
+      },
+    },
+    async (req) => {
+      const u = await plugin.setAccess(req.params.id, req.body)
+      return { ok: true, userId: u?.id ?? null, perms: u?.perms.plugins[PLUGIN_ID] ?? null }
+    },
+  )
+
+  // ---- the personal invite page (no login: the token is in the URL)
+  f.get(`/join/${PLUGIN_ID}/:token`, { schema: { hide: true, params: z.object({ token: z.string().max(80) }) } }, async (req, reply) => {
+    const lang = reqLang(req)
+    reply.type('text/html; charset=utf-8').header('cache-control', 'no-store').header('referrer-policy', 'no-referrer')
+    const info = await plugin.joinInfo(req.params.token)
+    if (!info) return reply.code(404).send(messagePage(lang, tr(lang, 'Invalid link'), tr(lang, 'This link is not valid or has expired. Ask for a new one.')))
+    return reply.send(joinPage(lang, { ...info, base: `/join/${PLUGIN_ID}/${req.params.token}` }))
+  })
+  const joinHits = new Map<string, number[]>()
+  const joinLimit = (req: FastifyRequest) => {
+    const ip = requestIp(req)
+    const t = Date.now()
+    const h = (joinHits.get(ip) ?? []).filter((x) => t - x < 600_000)
+    if (h.length >= 20) throw new AppError('TOO_MANY_REQUESTS', 'Too many codes requested, wait a few minutes', 429)
+    h.push(t)
+    joinHits.set(ip, h)
+  }
+  f.post(`/join/${PLUGIN_ID}/:token/code`, { schema: { hide: true, params: z.object({ token: z.string().max(80) }), body: z.object({ phone: z.string().max(40) }) } }, async (req) => {
+    joinLimit(req)
+    return plugin.joinSendCode(req.params.token, req.body.phone, reqLang(req))
+  })
+  f.post(`/join/${PLUGIN_ID}/:token/verify`, { schema: { hide: true, params: z.object({ token: z.string().max(80) }), body: z.object({ code: z.string().max(12) }) } }, async (req, reply) => {
+    joinLimit(req)
+    const r = await plugin.joinVerify(req.params.token, req.body.code)
+    // already enabled for WhatsOps: signed in straight away (the code just proved the number)
+    const w = await app.users.bySource(`${PLUGIN_ID}:${r.memberId}`)
+    let signedIn = false
+    if (w && pluginAccess(w, PLUGIN_ID)) {
+      await app.users.touch(w.id)
+      const tok = await app.admin.createSession(`${w.name} · invite link · ${String(req.headers['user-agent'] ?? '').slice(0, 120)}`, w.id)
+      app.admin.setCookie(reply, tok, publicOrigin(req, app.settings.get().publicUrl).startsWith('https://'))
+      signedIn = true
+    }
+    return { phone: r.phone, signedIn }
+  })
+
   // webhook target (no login: the secret is in the URL)
   f.post(`/plugins/${PLUGIN_ID}/hook/:secret`, { schema: { hide: true, params: z.object({ secret: z.string() }) } }, async (req, reply) => {
     if (!plugin.cfg.hookSecret || req.params.secret !== plugin.cfg.hookSecret) return reply.code(404).send()
@@ -731,4 +1170,3 @@ export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: C
     return { ok: true }
   })
 }
-

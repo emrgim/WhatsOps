@@ -117,9 +117,28 @@ export const TABLES: TableDef[] = [
     cols: [
       ['id', 'id', 'notnull'], ['subject', 'name'], ['object_type', 'short'], ['object_id', 'id'], ['object_name', 'name'], ['participants', 'long'],
       ['reply_count', 'int'], ['last_comment_id', 'big'], ['last_at', 'big'], ['sync', 'int'], ['state', 'short'], ['group_jid', 'key'], ['error', 'long'],
-      ['synced_comment_id', 'big'], ['created_at', 'big'],
+      ['synced_comment_id', 'big'], ['created_at', 'big'], ['owner_member_id', 'id'], ['admins', 'long'],
     ],
     pk: ['id'],
+  },
+  // WhatsOps users besides the owner (granular permissions, sign-in with a code on their own WhatsApp)
+  {
+    name: 'users',
+    cols: [
+      ['id', 'id', 'notnull'], ['name', 'name'], ['phone', 'short'], ['perms', 'long'], ['active', 'int'], ['source', 'key'],
+      ['created_at', 'big'], ['last_login', 'big'],
+    ],
+    pk: ['id'],
+  },
+  // Current RMS users and the WhatsApp number they registered with their personal invite link
+  {
+    name: 'crms_users',
+    cols: [
+      ['member_id', 'id', 'notnull'], ['name', 'name'], ['email', 'name'], ['phone', 'short'], ['verified_at', 'big'],
+      ['invite_hash', 'key'], ['invite_expires', 'big'], ['code_hash', 'key'], ['code_phone', 'short'], ['code_expires', 'big'],
+      ['code_tries', 'int'], ['sends', 'long'], ['created_at', 'big'],
+    ],
+    pk: ['member_id'],
   },
   { name: 'crms_objects', cols: [['key', 'key', 'notnull'], ['community_jid', 'key'], ['name', 'name'], ['created_at', 'big']], pk: ['key'] },
   {
@@ -210,7 +229,7 @@ export const TABLES: TableDef[] = [
   },
   {
     name: 'admin_sessions',
-    cols: [['id_hash', 'key', 'notnull'], ['label', 'name'], ['created_at', 'big'], ['expires_at', 'big'], ['last_seen', 'big']],
+    cols: [['id_hash', 'key', 'notnull'], ['label', 'name'], ['created_at', 'big'], ['expires_at', 'big'], ['last_seen', 'big'], ['user_id', 'id']],
     pk: ['id_hash'],
   },
   {
@@ -262,6 +281,17 @@ export async function migrate(h: DbHandle): Promise<void> {
     b = b.addPrimaryKeyConstraint(`${t.name}_pk`, t.pk as any)
     if (dialect === 'mysql') b = b.modifyEnd(sql`DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci`)
     await b.execute()
+  }
+  // columns added in later versions to tables that already exist
+  const existing = await db.introspection.getTables()
+  for (const t of TABLES) {
+    const have = existing.find((x) => x.name === t.name)
+    if (!have) continue
+    for (const [name, type] of t.cols) {
+      if (have.columns.some((c) => c.name === name)) continue
+      await db.schema.alterTable(t.name).addColumn(name, colType(dialect, type) as any).execute()
+      logger.info({ table: t.name, column: name }, 'database column added')
+    }
   }
   const row = await db.selectFrom('meta').select('v').where('k', '=', 'schema_version').executeTakeFirst()
   if (!row) {

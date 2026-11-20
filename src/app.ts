@@ -11,6 +11,7 @@ import type { Reports } from './reports.js'
 import type { Updater } from './update.js'
 import type { License } from './license.js'
 import type { CurrentRmsPlugin } from './plugins/currentrms.js'
+import type { Users } from './users.js'
 import { AppError } from './util.js'
 
 export type App = {
@@ -26,6 +27,7 @@ export type App = {
   reports: Reports
   updater: Updater
   license: License
+  users: Users
   plugins: { currentrms: CurrentRmsPlugin }
   restart: (reason: string) => void
 }
@@ -58,7 +60,8 @@ export async function authenticate(app: App, req: FastifyRequest, allowCookie = 
   }
   if (allowCookie) {
     const c = req.cookies?.[SESSION_COOKIE]
-    if (c && (await app.admin.checkSession(c))) {
+    const s = c ? await app.admin.session(c) : null
+    if (s) {
       // CSRF: cookie-authenticated writes must come from our own origin
       if (req.method !== 'GET' && req.method !== 'HEAD') {
         const origin = String(req.headers.origin ?? req.headers.referer ?? '')
@@ -68,6 +71,11 @@ export async function authenticate(app: App, req: FastifyRequest, allowCookie = 
         } catch {
           return null
         }
+      }
+      if (s.userId) {
+        const u = await app.users.get(s.userId)
+        if (!u || !u.active) return null
+        return { kind: 'user', id: u.id, label: u.name, scopes: new Set(), accounts: [], user: u }
       }
       return { kind: 'admin', id: 'admin', label: 'admin', scopes: new Set(['read', 'send', 'admin']), accounts: '*' }
     }

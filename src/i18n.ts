@@ -95,6 +95,8 @@ const EN: Record<string, string> = {
 - Use whatsapp_accounts to see which numbers are connected; pass "account" to pick a non-default number.
 - Reply to the user in their language.`,
   '@otp': '🔐 WhatsOps login code: *{0}*\nValid for 5 minutes. If you did not request it, ignore this message.',
+  '@otp_user': '🔐 WhatsOps — {1}, your login code: *{0}*\nValid for 5 minutes. If you did not request it, ignore this message.',
+  '@crms_code': '🔐 WhatsOps · Current RMS ({1}): your code is *{0}*\nValid for 10 minutes. If you did not request it, ignore this message.',
   '@login_hint':
     'First access, or no number linked yet? Ask your agent for a <i>login link</i> (valid 30 minutes) or run <code>mcp-mrg-whatsops login-link</code> on the server.',
 }
@@ -110,6 +112,8 @@ const IT: Record<string, string> = {
 - whatsapp_accounts mostra i numeri collegati; passa "account" per usare un numero diverso da quello predefinito.
 - Rispondi all'utente nella sua lingua.`,
   '@otp': '🔐 Codice di accesso WhatsOps: *{0}*\nValido 5 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',
+  '@otp_user': '🔐 WhatsOps — {1}, il tuo codice di accesso: *{0}*\nValido 5 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',
+  '@crms_code': '🔐 WhatsOps · Current RMS ({1}): il tuo codice è *{0}*\nValido 10 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',
   '@login_hint':
     'Primo accesso o nessun numero collegato? Chiedi al tuo agente un <i>link di accesso</i> (valido 30 minuti) oppure esegui <code>mcp-mrg-whatsops login-link</code> sul server.',
 
@@ -332,6 +336,31 @@ const IT: Record<string, string> = {
   'Discussion {0} not found (refresh the list)': 'Discussione {0} non trovata (aggiorna l\'elenco)',
   'WhatsApp did not create the group': 'WhatsApp non ha creato il gruppo',
   'WhatsApp did not create the community': 'WhatsApp non ha creato la community',
+  'Write the full number with the country code, e.g. +39 333 123 4567': 'Scrivi il numero completo con il prefisso internazionale, es. +39 333 123 4567',
+  'Another user already has this number ({0})': 'Un altro utente ha già questo numero ({0})',
+  'The name is required': 'Il nome è obbligatorio',
+  'User {0} not found': 'Utente {0} non trovato',
+  'The user is switched off': 'L\'utente è disattivato',
+  'Enabled user? Get the code on <b>your own</b> WhatsApp number.': 'Sei un utente abilitato? Ricevi il codice sul <b>tuo</b> numero WhatsApp.',
+  'If {0} is enabled, the code is on its way · resend': 'Se {0} è abilitato, il codice sta arrivando · rimanda',
+  'Your WhatsApp number · WhatsOps': 'Il tuo numero WhatsApp · WhatsOps',
+  'Hi {0}': 'Ciao {0}',
+  'Register your WhatsApp number for the Current RMS discussions of {0}: you become an administrator of the WhatsApp groups of the records you own.': 'Registra il tuo numero WhatsApp per le discussioni Current RMS di {0}: diventi amministratore dei gruppi WhatsApp dei record di cui sei proprietario.',
+  'Registered number: {0}': 'Numero registrato: {0}',
+  'Confirm': 'Conferma',
+  'Code sent on WhatsApp to {0}.': 'Codice inviato su WhatsApp a {0}.',
+  'Done: {0} is registered.': 'Fatto: {0} è registrato.',
+  'Open WhatsOps': 'Apri WhatsOps',
+  'You can only manage the discussions of the records you own': 'Puoi gestire solo le discussioni dei record di cui sei proprietario',
+  'You are not allowed to do this': 'Non hai il permesso di farlo',
+  'Current RMS user {0} not found': 'Utente Current RMS {0} non trovato',
+  'This link is not valid or has expired. Ask for a new one.': 'Questo link non è valido o è scaduto. Chiedine uno nuovo.',
+  '{0} is not on WhatsApp': '{0} non è su WhatsApp',
+  'Current RMS users': 'Utenti Current RMS',
+  'List the Current RMS users with their WhatsApp number (confirmed through their invite link, or from the contacts custom field), the records they own and their access to WhatsOps.': 'Elenca gli utenti Current RMS con il loro numero WhatsApp (confermato con il link d\'invito, o dal campo personalizzato dei contatti), i record di cui sono proprietari e il loro accesso a WhatsOps.',
+  'Invite a Current RMS user': 'Invita un utente Current RMS',
+  'Create the personal link (valid 14 days) where a Current RMS user registers their WhatsApp number with a code sent on WhatsApp. They then become admin of the groups of the records they own. Give the link only to that user: a new link cancels the previous one.': 'Crea il link personale (valido 14 giorni) dove un utente Current RMS registra il suo numero WhatsApp con un codice inviato su WhatsApp. Poi diventa amministratore dei gruppi dei record di cui è proprietario. Dai il link solo a quell\'utente: un nuovo link annulla il precedente.',
+  'Current RMS user id (from currentrms_users)': 'Id utente Current RMS (da currentrms_users)',
 }
 
 /** All translatable keys (used by tests to make sure Italian covers every English string). */

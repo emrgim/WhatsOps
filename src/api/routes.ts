@@ -18,6 +18,7 @@ import { handleMcpRequest } from '../mcp/server.js'
 import { defaultLang, reqLang, setServerLanguage, tr } from '../i18n.js'
 import { currentTheme, desktopTheme } from '../theme.js'
 import { registerCurrentRms } from '../plugins/currentrms.js'
+import { normPerms, phoneDigits, pluginAccess } from '../users.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -42,6 +43,15 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     req.principal = p
   }
   const P = (req: FastifyRequest) => req.principal as Principal
+  /** Any signed-in caller (owner, key, OAuth, user); what they may do is checked by the handler. */
+  const signedIn = async (req: FastifyRequest, reply: FastifyReply) => {
+    const p = await authenticate(app, req)
+    if (!p) {
+      reply.header('www-authenticate', app.oauth.wwwAuthenticate(req, '/v1'))
+      throw new AppError('UNAUTHORIZED', 'Missing or invalid credentials (Bearer API key, OAuth token or admin session)', 401)
+    }
+    req.principal = p
+  }
   const secure = (req: FastifyRequest) => publicOrigin(req, app.settings.get().publicUrl).startsWith('https://')
 
   // ------------------------------------------------------------------ public
@@ -89,9 +99,10 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   })
 
   f.get('/', { schema: { hide: true } }, async (req, reply) => {
-    const ok = await app.admin.checkSession(req.cookies?.[SESSION_COOKIE])
+    const s = await app.admin.session(req.cookies?.[SESSION_COOKIE])
+    const ok = !!s && (!s.userId || !!(await app.users.get(s.userId))?.active)
     reply.type('text/html; charset=utf-8').header('cache-control', 'no-store')
-    if (!ok) return reply.send(loginPage(reqLang(req), { otpEnabled: app.settings.get().otpEnabled, passwordSet: await app.admin.passwordSet() }))
+    if (!ok) return reply.send(loginPage(reqLang(req), { otpEnabled: app.settings.get().otpEnabled, passwordSet: await app.admin.passwordSet(), userLogin: (await app.users.countActive()) > 0 }))
     return reply.send(fs.readFileSync(path.join(PUBLIC_DIR, 'app.html')))
   })
 
@@ -107,25 +118,48 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   )
 
   // ------------------------------------------------------------------ admin login
-  f.get('/login', { schema: { hide: true, querystring: z.object({ t: z.string().optional() }) } }, async (req, reply) => {
+  f.get('/login', { schema: { hide: true, querystring: z.object({ t: z.string().optional(), u: z.string().max(64).optional() }) } }, async (req, reply) => {
     reply.type('text/html; charset=utf-8').header('cache-control', 'no-store')
-    if (!req.query.t || !(await app.admin.consumeLoginToken('link', req.query.t, requestIp(req)))) {
+    const user = req.query.u ? await app.users.get(req.query.u) : null
+    const valid = !!req.query.t && (req.query.u ? !!user?.active && (await app.admin.consumeLoginToken('linku', `${req.query.u}:${req.query.t}`, requestIp(req))) : await app.admin.consumeLoginToken('link', req.query.t, requestIp(req)))
+    if (!valid) {
       const lang = reqLang(req)
       return reply.code(403).send(messagePage(lang, tr(lang, 'Invalid link'), tr(lang, 'Login link expired or already used. Ask for a new one.')))
     }
-    const tok = await app.admin.createSession(`magic link · ${String(req.headers['user-agent'] ?? '').slice(0, 120)}`)
+    if (user) await app.users.touch(user.id)
+    const tok = await app.admin.createSession(`${user ? user.name + ' · ' : ''}magic link · ${String(req.headers['user-agent'] ?? '').slice(0, 120)}`, user?.id ?? null)
     app.admin.setCookie(reply, tok, secure(req))
     return reply.redirect('/', 303)
   })
 
-  f.get('/auth/me', { schema: { hide: true } }, async (req) => ({
-    loggedIn: await app.admin.checkSession(req.cookies?.[SESSION_COOKIE]),
-    otpEnabled: app.settings.get().otpEnabled,
-    passwordSet: await app.admin.passwordSet(),
-  }))
+  f.get('/auth/me', { schema: { hide: true } }, async (req) => {
+    const s = await app.admin.session(req.cookies?.[SESSION_COOKIE])
+    return { loggedIn: !!s, role: s ? (s.userId ? 'user' : 'owner') : null, otpEnabled: app.settings.get().otpEnabled, passwordSet: await app.admin.passwordSet() }
+  })
 
   const otpHits: number[] = []
-  f.post('/auth/otp/request', { schema: { hide: true, body: z.object({ account: z.string().optional() }).optional() } }, async (req) => {
+  const userOtpHits = new Map<string, number[]>()
+  f.post('/auth/otp/request', { schema: { hide: true, body: z.object({ account: z.string().optional(), phone: z.string().max(40).optional() }).optional() } }, async (req) => {
+    // a user: the code goes to their own WhatsApp number, from the default number
+    if (req.body?.phone) {
+      const d = phoneDigits(req.body.phone)
+      if (d.length < 8 || d.length > 15) throw new AppError('INVALID_PHONE', 'Write the full number with the country code, e.g. +39 333 123 4567', 400)
+      const t = now()
+      const hits = (userOtpHits.get(d) ?? []).filter((x) => t - x < 3600_000)
+      if (hits.length >= 5) throw new AppError('TOO_MANY_REQUESTS', 'Too many codes requested, wait a few minutes', 429)
+      const masked = `+${d.slice(0, 2)}…${d.slice(-3)}`
+      const user = await app.users.byPhone(d)
+      // same answer whether the number is enabled or not
+      if (!user?.active) return { ok: true, sentTo: masked }
+      const sender = app.accounts.list().find((a) => a.row.is_default && a.state === 'open') ?? app.accounts.list().find((a) => a.state === 'open')
+      if (!sender) throw new AppError('NO_CONNECTED_NUMBER', 'No connected WhatsApp number to send the code to. Use a login link.', 409)
+      hits.push(t)
+      userOtpHits.set(d, hits)
+      const code = await app.admin.createLoginToken('otpu', 5 * 60_000, user.id)
+      await sender.sendRaw(`${d}@s.whatsapp.net`, { text: tr(reqLang(req), '@otp_user', [code, user.name]) })
+      logger.info({ mod: 'auth', user: user.id }, `login code sent to user ${user.name}`)
+      return { ok: true, sentTo: masked }
+    }
     if (!app.settings.get().otpEnabled) throw new AppError('DISABLED', 'WhatsApp login codes are disabled', 403)
     const t = now()
     while (otpHits.length && t - otpHits[0] > 10 * 60_000) otpHits.shift()
@@ -141,7 +175,17 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     return { ok: true, sentTo: `${phone.slice(0, 4)}…${phone.slice(-3)}` }
   })
 
-  f.post('/auth/otp/verify', { schema: { hide: true, body: z.object({ code: z.string() }) } }, async (req, reply) => {
+  f.post('/auth/otp/verify', { schema: { hide: true, body: z.object({ code: z.string(), phone: z.string().max(40).optional() }) } }, async (req, reply) => {
+    if (req.body.phone) {
+      const user = await app.users.byPhone(req.body.phone)
+      const code = req.body.code.replace(/\D/g, '')
+      if (!user?.active || !(await app.admin.consumeLoginToken('otpu', `${user.id}:${code}`, requestIp(req)))) throw new AppError('INVALID_CODE', 'Wrong or expired code', 401)
+      await app.users.touch(user.id)
+      const tok = await app.admin.createSession(`${user.name} · whatsapp code · ${String(req.headers['user-agent'] ?? '').slice(0, 120)}`, user.id)
+      app.admin.setCookie(reply, tok, secure(req))
+      logger.info({ mod: 'auth', user: user.id }, `user ${user.name} signed in`)
+      return { ok: true }
+    }
     if (!(await app.admin.consumeLoginToken('otp', req.body.code.replace(/\D/g, ''), requestIp(req)))) throw new AppError('INVALID_CODE', 'Wrong or expired code', 401)
     const tok = await app.admin.createSession(`whatsapp code · ${String(req.headers['user-agent'] ?? '').slice(0, 120)}`)
     app.admin.setCookie(reply, tok, secure(req))
@@ -529,10 +573,56 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     }
   })
 
+  // ---- who am I (the page shows only what the caller may use)
+  f.get('/v1/me', { preHandler: signedIn, schema: { ...tags('Admin'), summary: 'The signed-in caller: owner or user, with the user\'s permissions' } }, async (req) => {
+    const p = P(req)
+    if (p.kind === 'user' && p.user) return { role: 'user', id: p.user.id, name: p.user.name, phone: p.user.phone ? `+${p.user.phone.slice(0, 2)}…${p.user.phone.slice(-3)}` : null, perms: p.user.perms }
+    return { role: p.scopes.has('admin') ? 'owner' : p.kind, id: p.id, name: p.label, perms: null }
+  })
+
   // ---- plugins
-  f.get('/v1/plugins', { preHandler: guard('admin'), schema: { ...tags('Plugins'), summary: 'Installed plugins' } }, async () => [
-    { id: 'currentrms', name: 'Current RMS', logo: 'currentrms.png', configured: app.plugins.currentrms.configured() },
-  ])
+  const PLUGINS = [{ id: 'currentrms', name: 'Current RMS', logo: 'currentrms.png' }]
+  f.get('/v1/plugins', { preHandler: signedIn, schema: { ...tags('Plugins'), summary: 'Installed plugins (a user sees only the ones enabled for them)' } }, async (req) => {
+    const p = P(req)
+    if (p.kind !== 'user') requireScope(p, 'read')
+    return PLUGINS.filter((x) => p.kind !== 'user' || pluginAccess(p.user, x.id)).map((x) => ({
+      ...x,
+      configured: app.plugins.currentrms.configured(),
+      ...(p.kind === 'user' ? { perms: pluginAccess(p.user, x.id) } : {}),
+    }))
+  })
+
+  // ---- users (owner only): who signs in besides the owner and what they see
+  const userBody = z.object({
+    name: z.string().min(1).max(120).optional(),
+    phone: z.string().max(40).nullable().optional(),
+    active: z.boolean().optional(),
+    perms: z.object({ plugins: z.record(z.string(), z.object({ access: z.boolean(), scope: z.enum(['owned', 'all']).optional(), manage: z.boolean().optional() })) }).optional(),
+  })
+  const userOut = (u: Awaited<ReturnType<typeof app.users.get>>) => u && { id: u.id, name: u.name, phone: u.phone, active: u.active, perms: u.perms, source: u.source, createdAt: new Date(u.createdAt).toISOString(), lastLogin: u.lastLogin ? new Date(u.lastLogin).toISOString() : null }
+  f.get('/v1/admin/users', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Users and their permissions' } }, async () => (await app.users.list()).map(userOut))
+  f.post('/v1/admin/users', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Add a user (signs in with a code on their own WhatsApp number)', body: userBody.extend({ name: z.string().min(1).max(120) }) } }, async (req) => {
+    const u = await app.users.create({ name: req.body.name, phone: req.body.phone ?? null, perms: normPerms(req.body.perms), active: req.body.active })
+    logger.info({ mod: 'users', user: u.id }, `user ${u.name} added`)
+    return userOut(u)
+  })
+  f.put('/v1/admin/users/:id', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Change a user: name, number, active, permissions', params: z.object({ id: z.string() }), body: userBody } }, async (req) => {
+    const u = await app.users.update(req.params.id, req.body)
+    logger.info({ mod: 'users', user: u.id }, `user ${u.name} changed`)
+    return userOut(u)
+  })
+  f.delete('/v1/admin/users/:id', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Remove a user (signed out at once)', params: z.object({ id: z.string() }) } }, async (req) => {
+    await app.users.remove(req.params.id)
+    logger.info({ mod: 'users', user: req.params.id }, 'user removed')
+    return { ok: true }
+  })
+  f.post('/v1/admin/users/:id/login-link', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'One-time sign-in link for a user (30 minutes)', params: z.object({ id: z.string() }) } }, async (req) => {
+    const u = await app.users.get(req.params.id)
+    if (!u) throw new AppError('NO_USER', 'User {0} not found', 404, [req.params.id])
+    if (!u.active) throw new AppError('USER_INACTIVE', 'The user is switched off', 409)
+    const t = await app.admin.createLoginToken('linku', 30 * 60_000, u.id)
+    return { url: `${publicOrigin(req, app.settings.get().publicUrl)}/login?u=${encodeURIComponent(u.id)}&t=${t}`, expiresInMin: 30 }
+  })
   registerCurrentRms(fastify, app, app.plugins.currentrms, guard, tags)
 
   // ---- license (Polar) — off while WhatsOps is free

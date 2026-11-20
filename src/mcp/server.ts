@@ -134,6 +134,30 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   )
 
   tool(
+    'currentrms_users',
+    'Current RMS users',
+    'List the Current RMS users with their WhatsApp number (confirmed through their invite link, or from the contacts custom field), the records they own and their access to WhatsOps.',
+    'read',
+    {},
+    { readOnlyHint: true },
+    async () => {
+      const pl = app.plugins.currentrms
+      if (!pl.configured()) throw new AppError('CRMS_NOT_CONFIGURED', 'Connect Current RMS first (subdomain and API key)', 409)
+      return pl.users()
+    },
+  )
+
+  tool(
+    'currentrms_user_invite',
+    'Invite a Current RMS user',
+    'Create the personal link (valid 14 days) where a Current RMS user registers their WhatsApp number with a code sent on WhatsApp. They then become admin of the groups of the records they own. Give the link only to that user: a new link cancels the previous one.',
+    'send',
+    { user_id: z.string().describe(L('Current RMS user id (from currentrms_users)')) },
+    { openWorldHint: false },
+    async (a) => app.plugins.currentrms.invite(a.user_id, origin),
+  )
+
+  tool(
     'whatsops_feedback',
     'Send feedback about WhatsOps',
     'Send feedback about WhatsOps itself (a bug, an idea, anything else) to its developers. It opens a PUBLIC issue in the GitHub repository emrgim/WhatsOps, signed only with this installation code: never put phone numbers, names, message contents or keys in it. Show the text to the user and get their OK before sending.',

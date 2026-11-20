@@ -328,9 +328,16 @@ export class WaAccount {
           await this.store.upsertGroups(events['groups.update'])
         }
         if (events['group-participants.update']) {
-          const { id } = events['group-participants.update']
+          const { id, action, participants } = events['group-participants.update']
           this.groupCache.del(id)
           void this.refreshGroup(id)
+          // internal (plugins): who joined / left / changed role
+          this.ctx.bus.publish(
+            'group.participants',
+            this.row.id,
+            { group: id, action, participants: (participants ?? []).map((p) => ({ jid: p.id, phone: userOf(p.phoneNumber ?? (p.id?.endsWith('@s.whatsapp.net') ? p.id : '')) || null })) },
+            true,
+          )
         }
       } catch (e) {
         logger.error({ account: this.row.id, err: String((e as Error)?.stack ?? e) }, 'event processing failed')

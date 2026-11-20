@@ -63,7 +63,7 @@ $$('.viewsw').forEach((w) => {
 
 // ---------------------------------------------------------------- tabs
 // top tabs: numbers · connectors (mcp / api / hooks) · settings (general / db)
-const SUBS = { connect: ['plugins', 'mcp', 'api', 'hooks'], settings: ['general', 'updates', 'db', 'log', 'feedback', 'license'] }
+const SUBS = { connect: ['plugins', 'mcp', 'api', 'hooks'], settings: ['general', 'users', 'updates', 'db', 'log', 'feedback', 'license'] }
 const LEGACY = { keys: 'connect/api', hooks: 'connect/hooks', db: 'settings/db' }
 const lastSub = { connect: 'plugins', settings: 'general' }
 let routeItem = null // third part of the route: #connect/mcp/cursor
@@ -318,7 +318,7 @@ function tiles(list, sub) {
   return list.map((c) => `<button type="button" class="tile" data-tile="${esc(c.id)}" data-sub="${sub}">${logo(c)}<span class="tile-name">${esc(clientName(c))}</span><span class="chev" aria-hidden="true">›</span></button>`).join('')
 }
 function detailHead(c, sub) {
-  return `<div class="detail-head"><button type="button" class="ghost small" data-back="${sub}">← ${esc(sub === 'mcp' ? 'MCP' : t('sub.plugins'))}</button></div>
+  return `${sub ? `<div class="detail-head"><button type="button" class="ghost small" data-back="${sub}">← ${esc(sub === 'mcp' ? 'MCP' : t('sub.plugins'))}</button></div>` : ''}
     <div class="detail-title">${logo(c, true)}<h2>${esc(clientName(c))}</h2></div>`
 }
 function endpointLine() {
@@ -365,19 +365,37 @@ async function loadConnect() {
 }
 async function loadPlugins() {
   PLUGINS = await api('GET', '/v1/plugins')
-  const item = routeItem
+  let item = routeItem
+  // a user with one plugin goes straight into it
+  if (!item && isUser() && PLUGINS.length === 1) { item = routeItem = PLUGINS[0].id; history.replaceState(null, '', '#connect/plugins/' + item) }
   const c = item && PLUGINS.find((x) => x.id === item)
   $('#pluginTiles').hidden = !!c
   $('#pluginBar').hidden = !!c || !PLUGINS.length
   $('#pluginDetail').hidden = !c
-  if (c) { $('#pluginDetail').innerHTML = detailHead(c, 'plugins') + (c.id === 'currentrms' ? CRMS_HTML() : ''); if (c.id === 'currentrms') await crmsLoad(); return }
-  $('#pluginTiles').innerHTML = PLUGINS.length ? tiles(PLUGINS, 'plugins') : `<p class="muted">${esc(t('plugins.none'))}</p>`
+  if (c) {
+    if (c.id === 'currentrms') { const st = await api('GET', CRMS); $('#pluginDetail').innerHTML = (isUser() && PLUGINS.length === 1 ? detailHead(c, null) : detailHead(c, 'plugins')) + CRMS_HTML(st); await crmsLoad(st) }
+    else $('#pluginDetail').innerHTML = detailHead(c, 'plugins')
+    return
+  }
+  $('#pluginTiles').innerHTML = PLUGINS.length ? tiles(PLUGINS, 'plugins') : `<p class="muted">${esc(t(isUser() ? 'plugins.noneUser' : 'plugins.none'))}</p>`
 }
+const isUser = () => state.me?.role === 'user'
 
 // ---------------------------------------------------------------- plugin: Current RMS
 const CRMS = '/v1/plugins/currentrms'
 let crmsTimer = null
-const CRMS_HTML = () => `
+const crmsCan = (st) => ({ manage: !st.me || st.me.manage, owner: !isUser() })
+const CRMS_HTML = (st) => {
+  const can = crmsCan(st)
+  const mine = st.me ? `<div class="card"><p>${esc(t(st.me.scope === 'all' ? 'crms.me.all' : 'crms.me.owned'))}</p>${st.me.scope !== 'all' && !st.me.member ? `<p class="muted small">${esc(t('crms.me.noMember'))}</p>` : ''}</div>` : ''
+  const discussions = `
+  <div class="card">
+    <div class="crms-bar"><h3>${esc(t('crms.discussions'))}</h3><input type="search" id="crmsQ" placeholder="${esc(t('crms.search'))}"><button type="button" class="ghost small" data-crms="refresh">${esc(t('crms.refresh'))}</button></div>
+    <p class="muted small" id="crmsInfo"></p>
+    <div id="crmsTree"></div>
+  </div>`
+  if (!can.manage) return mine + discussions
+  return mine + `
   <form class="card form" id="crmsConn">
     <h3>${esc(t('crms.conn'))}</h3>
     <div class="row"><label><span>${esc(t('crms.subdomain'))}</span> <input name="subdomain" placeholder="${esc(t('crms.subdomainPh'))}" autocomplete="off" spellcheck="false"></label>
@@ -388,51 +406,94 @@ const CRMS_HTML = () => `
   </form>
   <form class="card form" id="crmsSet">
     <h3>${esc(t('crms.settings'))}</h3>
-    <label><span>${esc(t('crms.account'))}</span> <select name="account"></select></label>
+    ${can.owner ? `<label><span>${esc(t('crms.account'))}</span> <select name="account"></select></label>
+    <p class="muted small">${esc(t('crms.accountHint'))}</p>
+    <label><span>${esc(t('crms.backup'))}</span> <select name="backupAccount"></select></label>
+    <p class="muted small">${esc(t('crms.backupHint'))}</p>` : ''}
     <div><span class="muted small">${esc(t('crms.mode'))}</span><br><div class="seg" role="radiogroup">
       <label><input type="radio" name="mode" value="groups"><span>${esc(t('crms.mode.groups'))}</span></label>
       <label><input type="radio" name="mode" value="community"><span>${esc(t('crms.mode.community'))}</span></label></div>
       <p class="muted small" id="crmsModeHint"></p></div>
+    <label class="inline"><input type="checkbox" name="ownerAdmin"> <span>${esc(t('crms.ownerAdmin'))}</span></label>
+    <p class="muted small">${esc(t('crms.ownerAdminHint'))}</p>
     <label><span>${esc(t('crms.field'))}</span> <select name="whatsappField"></select></label>
     <p class="muted small">${esc(t('crms.fieldHint'))}</p>
     <label class="inline"><input type="checkbox" name="inviteFallback"> <span>${esc(t('crms.invite'))}</span></label>
     <button type="submit">${esc(t('save'))}</button>
   </form>
+  <div class="card" id="crmsUsersCard">
+    <h3>${esc(t('crms.u.title'))}</h3>
+    <p class="muted small">${esc(t(can.owner ? 'crms.u.hintOwner' : 'crms.u.hint'))}</p>
+    <div id="crmsUsers"></div>
+  </div>
   <div class="card form">
     <h3>${esc(t('crms.hooks'))}</h3>
     <p id="crmsHookState"></p>
     <p class="muted small">${esc(t('crms.hooksHint'))}</p>
     <button type="button" class="ghost" data-crms="hooks">${esc(t('crms.hooksGo'))}</button>
-  </div>
-  <div class="card">
-    <div class="crms-bar"><h3>${esc(t('crms.discussions'))}</h3><input type="search" id="crmsQ" placeholder="${esc(t('crms.search'))}"><button type="button" class="ghost small" data-crms="refresh">${esc(t('crms.refresh'))}</button></div>
-    <p class="muted small" id="crmsInfo"></p>
-    <div id="crmsTree"></div>
-  </div>`
-function crmsModeHint(mode) { $('#crmsModeHint').textContent = t(mode === 'community' ? 'crms.modeHint.community' : 'crms.modeHint.groups') }
-async function crmsLoad() {
-  const s = await api('GET', CRMS)
+  </div>` + discussions
+}
+function crmsModeHint(mode) { const el = $('#crmsModeHint'); if (el) el.textContent = t(mode === 'community' ? 'crms.modeHint.community' : 'crms.modeHint.groups') }
+async function crmsLoad(st) {
+  const s = st ?? (await api('GET', CRMS))
   const c = s.config
   const f1 = $('#crmsConn'), f2 = $('#crmsSet')
-  f1.subdomain.value = c.subdomain || ''
-  f1.apiKey.placeholder = c.apiKeySet ? t('crms.keySaved') : ''
-  f2.account.innerHTML = state.accounts.map((a) => `<option value="${esc(a.id)}">${esc(a.name)} ${esc(a.me?.phone ?? '')}</option>`).join('')
-  f2.account.value = c.account || (state.accounts.find((a) => a.default)?.id ?? '')
-  $$('input[name=mode]', f2).forEach((i) => { i.checked = i.value === (c.mode || 'groups') })
-  crmsModeHint(c.mode)
-  f2.inviteFallback.checked = c.inviteFallback !== false
-  f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + (c.whatsappField ? `<option value="${esc(c.whatsappField)}">${esc(c.whatsappField)}</option>` : '')
-  f2.whatsappField.value = c.whatsappField || ''
-  const hookErr = c.hooksError === 'NO_PUBLIC_URL' ? t('crms.hooksNoPublic') : c.hooksError
-  $('#crmsHookState').textContent = c.hooks?.length ? t('crms.hooksOn', c.hooks.length) + (hookErr ? ' · ' + hookErr : '') : hookErr || t('crms.hooksOff')
-  $('#crmsConnState').textContent = s.configured ? t('crms.connected', c.subdomain) : t('crms.notConnected')
-  if (s.configured) {
-    api('GET', CRMS + '/custom-fields').then((fields) => {
-      f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + fields.map((x) => `<option value="${esc(x.key)}">${esc(x.name)}</option>`).join('')
-      f2.whatsappField.value = c.whatsappField || ''
-    }).catch(() => {})
-    await crmsTree()
-  } else $('#crmsTree').innerHTML = `<p class="muted">${esc(t('crms.connectFirst'))}</p>`
+  if (f1 && f2) {
+    f1.subdomain.value = c.subdomain || ''
+    f1.apiKey.placeholder = c.apiKeySet ? t('crms.keySaved') : ''
+    if (f2.account) {
+      const accs = state.accounts ?? []
+      const opt = (a) => `<option value="${esc(a.id)}">${esc(a.name)} ${esc(a.me?.phone ?? '')}</option>`
+      f2.account.innerHTML = accs.map(opt).join('')
+      f2.account.value = c.account || (accs.find((a) => a.default)?.id ?? '')
+      f2.backupAccount.innerHTML = `<option value="">${esc(t('crms.backupNone'))}</option>` + accs.filter((a) => a.id !== f2.account.value).map(opt).join('')
+      f2.backupAccount.value = c.backupAccount || ''
+    }
+    $$('input[name=mode]', f2).forEach((i) => { i.checked = i.value === (c.mode || 'groups') })
+    crmsModeHint(c.mode)
+    f2.inviteFallback.checked = c.inviteFallback !== false
+    f2.ownerAdmin.checked = c.ownerAdmin !== false
+    f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + (c.whatsappField ? `<option value="${esc(c.whatsappField)}">${esc(c.whatsappField)}</option>` : '')
+    f2.whatsappField.value = c.whatsappField || ''
+    const hookErr = c.hooksError === 'NO_PUBLIC_URL' ? t('crms.hooksNoPublic') : c.hooksError
+    $('#crmsHookState').textContent = c.hooks?.length ? t('crms.hooksOn', c.hooks.length) + (hookErr ? ' · ' + hookErr : '') : hookErr || t('crms.hooksOff')
+    $('#crmsConnState').textContent = s.configured ? t('crms.connected', c.subdomain) : t('crms.notConnected')
+    if (s.configured) {
+      api('GET', CRMS + '/custom-fields').then((fields) => {
+        f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + fields.map((x) => `<option value="${esc(x.key)}">${esc(x.name)}</option>`).join('')
+        f2.whatsappField.value = c.whatsappField || ''
+      }).catch(() => {})
+      crmsUsers().catch((e) => { $('#crmsUsers').innerHTML = `<p class="small err-text">${esc(e.message)}</p>` })
+    } else $('#crmsUsers').innerHTML = `<p class="muted">${esc(t('crms.u.connectFirst'))}</p>`
+  }
+  if (s.configured) await crmsTree()
+  else $('#crmsTree').innerHTML = `<p class="muted">${esc(t(f1 ? 'crms.connectFirst' : 'crms.notConnected'))}</p>`
+}
+async function crmsUsers() {
+  const el = $('#crmsUsers')
+  if (!el) return
+  const list = await api('GET', CRMS + '/users')
+  const owner = !isUser()
+  el.innerHTML = list.length ? list.map((u) => {
+    const acc = u.access && u.access.active && u.access.access
+    return `<div class="crms-user">
+    <div class="crms-user-main"><b>${esc(u.name)}</b> <span class="muted small">${esc(u.email || '')}</span>
+      <div class="small">${u.phone ? `${esc('+' + u.phone)} <span class="muted">· ${esc(t(u.phoneSource === 'confirmed' ? 'crms.u.confirmed' : 'crms.u.fromRms'))}</span>` : `<span class="muted">${esc(t('crms.u.noPhone'))}</span>`} <span class="muted">· ${esc(t('crms.u.records', u.records))}</span></div>
+      ${u.invite ? `<div class="muted small">${esc(t('crms.u.inviteUntil', fmtDate(u.invite.expiresAt)))}</div>` : ''}
+      <div class="crms-invite-out reveal" hidden></div>
+    </div>
+    <div class="crms-user-actions">
+      <button type="button" class="ghost small" data-uinv="${esc(u.id)}" data-uname="${esc(u.name)}">${esc(t('crms.u.invite'))}</button>
+      ${u.phoneSource === 'confirmed' ? `<button type="button" class="ghost small" data-uforget="${esc(u.id)}">${esc(t('crms.u.forget'))}</button>` : ''}
+    </div>
+    ${owner ? `<div class="crms-user-access">
+      <label class="inline"><span class="switch"><input type="checkbox" data-uacc="${esc(u.id)}" ${acc ? 'checked' : ''}><span></span></span> <span>${esc(t('crms.u.access'))}</span></label>
+      <select data-uscope="${esc(u.id)}" ${acc ? '' : 'disabled'}><option value="owned">${esc(t('crms.u.scope.owned'))}</option><option value="all">${esc(t('crms.u.scope.all'))}</option></select>
+      <label class="inline small"><input type="checkbox" data-umanage="${esc(u.id)}" ${u.access?.manage ? 'checked' : ''} ${acc ? '' : 'disabled'}> <span>${esc(t('crms.u.manage'))}</span></label>
+      ${u.access?.lastLogin ? `<span class="muted small">${esc(t('users.lastLogin', fmtDate(u.access.lastLogin)))}</span>` : ''}
+    </div>` : ''}
+  </div>` }).join('') : `<p class="muted">${esc(t('crms.u.none'))}</p>`
+  for (const u of list) { const sel = el.querySelector(`[data-uscope="${CSS.escape(u.id)}"]`); if (sel) sel.value = u.access?.scope || 'owned' }
 }
 const CRMS_TYPES = ['Opportunity', 'Project', 'Member', 'Invoice', 'Item', 'Product', 'Service', 'Activity', 'Quarantine', 'PurchaseOrder']
 async function crmsRefresh() {
@@ -456,7 +517,7 @@ async function crmsTree() {
   const on = tree.reduce((a, g) => a + g.discussions.filter((d) => d.sync).length, 0)
   $('#crmsInfo').textContent = t('crms.count', num(tree.length), num(n), num(on))
   $('#crmsTree').innerHTML = tree.length ? tree.map((g) => `<div class="crms-rec">
-      <div class="crms-rec-head"><span class="badge">${esc(CRMS_TYPES.includes(g.type) ? t('crms.type.' + g.type) : g.type)}</span> <b>${esc(g.name)}</b> <a class="small" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(t('crms.open'))} ↗</a></div>
+      <div class="crms-rec-head"><span class="badge">${esc(CRMS_TYPES.includes(g.type) ? t('crms.type.' + g.type) : g.type)}</span> <b>${esc(g.name)}</b>${g.owner ? ` <span class="muted small" title="${esc(t(g.owner.whatsapp ? 'crms.ownerOk' : 'crms.ownerNoPhone'))}">${esc(t('crms.owner', g.owner.name))}${g.owner.whatsapp ? ' ✓' : ''}</span>` : ''} <a class="small" href="${esc(g.url)}" target="_blank" rel="noopener">${esc(t('crms.open'))} ↗</a></div>
       ${g.discussions.map((d) => `<div class="crms-disc" data-disc="${esc(d.id)}">
         <label class="switch" title="${esc(t('crms.syncToggle'))}"><input type="checkbox" ${d.sync ? 'checked' : ''} data-sync="${esc(d.id)}"><span></span></label>
         <div class="crms-disc-main"><div><b>${esc(d.subject || '#' + d.id)}</b></div>
@@ -464,7 +525,7 @@ async function crmsTree() {
           ${d.participants.length ? `<div class="muted small">${d.participants.map((p) => esc(p.name) + (p.whatsapp ? ' ✓' : '')).join(', ')}</div>` : ''}
           ${d.error ? `<div class="small err-text">${esc(d.error)}</div>` : ''}</div>
         <span class="badge ${d.state === 'on' ? 'open' : d.state === 'error' ? 'bad' : d.state === 'creating' ? 'warn' : ''}">${esc(t('crms.state.' + (d.state || 'off')))}</span>
-      </div>`).join('')}</div>`).join('') : `<p class="muted">${esc(t('crms.none'))}</p>`
+      </div>`).join('')}</div>`).join('') : `<p class="muted">${esc(t(isUser() ? 'crms.noneMine' : 'crms.none'))}</p>`
   clearTimeout(crmsTimer)
   if (tree.some((g) => g.discussions.some((d) => d.state === 'creating'))) crmsTimer = setTimeout(() => routeItem === 'currentrms' && crmsTree().catch(() => {}), 4000)
 }
@@ -481,12 +542,28 @@ document.addEventListener('submit', run(async (e) => {
   } else if (e.target.id === 'crmsSet') {
     e.preventDefault()
     const f = e.target
-    await api('PUT', CRMS + '/config', { account: f.account.value, mode: f.querySelector('input[name=mode]:checked')?.value ?? 'groups', whatsappField: f.whatsappField.value, inviteFallback: f.inviteFallback.checked })
+    await api('PUT', CRMS + '/config', {
+      ...(f.account ? { account: f.account.value, backupAccount: f.backupAccount.value } : {}),
+      mode: f.querySelector('input[name=mode]:checked')?.value ?? 'groups', whatsappField: f.whatsappField.value, inviteFallback: f.inviteFallback.checked, ownerAdmin: f.ownerAdmin.checked,
+    })
     toast(t('saved'))
   }
 }))
 document.addEventListener('change', run(async (e) => {
   if (e.target.name === 'mode' && e.target.closest('#crmsSet')) crmsModeHint(e.target.value)
+  if (e.target.name === 'account' && e.target.closest('#crmsSet')) {
+    const f = e.target.form, keep = f.backupAccount.value
+    f.backupAccount.innerHTML = `<option value="">${esc(t('crms.backupNone'))}</option>` + (state.accounts ?? []).filter((a) => a.id !== f.account.value).map((a) => `<option value="${esc(a.id)}">${esc(a.name)} ${esc(a.me?.phone ?? '')}</option>`).join('')
+    f.backupAccount.value = keep !== f.account.value ? keep : ''
+  }
+  const acc = e.target.closest('[data-uacc],[data-uscope],[data-umanage]')
+  if (acc) {
+    const id = acc.dataset.uacc ?? acc.dataset.uscope ?? acc.dataset.umanage
+    const body = acc.dataset.uacc !== undefined ? { access: acc.checked } : acc.dataset.uscope !== undefined ? { scope: acc.value } : { manage: acc.checked }
+    try { await api('PUT', `${CRMS}/users/${encodeURIComponent(id)}/access`, body) } finally { await crmsUsers() }
+    toast(t('saved'))
+    return
+  }
   const sw = e.target.closest('[data-sync]')
   if (!sw) return
   const on = sw.checked
@@ -495,6 +572,21 @@ document.addEventListener('change', run(async (e) => {
   await crmsTree()
 }))
 document.addEventListener('click', run(async (e) => {
+  const inv = e.target.closest('[data-uinv]')
+  if (inv) {
+    const r = await api('POST', `${CRMS}/users/${encodeURIComponent(inv.dataset.uinv)}/invite`)
+    const out = inv.closest('.crms-user').querySelector('.crms-invite-out')
+    out.hidden = false
+    out.innerHTML = `<code>${esc(r.url)}</code><button type="button" class="small" data-copy="${esc(r.url)}">${esc(t('copy'))}</button><p class="muted small">${esc(t('crms.u.inviteHint', inv.dataset.uname, fmtDate(r.expiresAt)))}</p>`
+    return
+  }
+  const fg = e.target.closest('[data-uforget]')
+  if (fg) {
+    if (!confirm(t('crms.u.forgetConfirm'))) return
+    await api('DELETE', `${CRMS}/users/${encodeURIComponent(fg.dataset.uforget)}/phone`)
+    await crmsUsers()
+    return
+  }
   const b = e.target.closest('[data-crms]')
   if (!b) return
   b.disabled = true
@@ -506,6 +598,66 @@ document.addEventListener('click', run(async (e) => {
 }))
 let crmsQT = null
 document.addEventListener('input', (e) => { if (e.target.id === 'crmsQ') { clearTimeout(crmsQT); crmsQT = setTimeout(() => crmsTree().catch(() => {}), 300) } })
+
+// ---------------------------------------------------------------- users (Settings → Users): who signs in besides the owner
+let USERS = []
+async function loadUsersAdmin() {
+  const [list, plugins] = await Promise.all([api('GET', '/v1/admin/users'), api('GET', '/v1/plugins')])
+  USERS = list
+  $('#userAddPlugins').innerHTML = plugins.map((p) => `<label class="inline"><input type="checkbox" name="plugin" value="${esc(p.id)}"> <span>${esc(p.name)}</span></label>`).join('') || `<span class="muted small">${esc(t('plugins.none'))}</span>`
+  $('#userList').innerHTML = list.length ? list.map((u) => `<div class="user-row" data-uid="${esc(u.id)}">
+    <div class="user-main"><b>${esc(u.name)}</b> ${u.source?.startsWith('currentrms:') ? '<span class="badge">Current RMS</span>' : ''} ${u.active ? '' : `<span class="badge bad">${esc(t('users.off'))}</span>`}
+      <div class="small">${u.phone ? esc('+' + u.phone) : `<span class="muted">${esc(t('users.noPhone'))}</span>`} <span class="muted">· ${esc(u.lastLogin ? t('users.lastLogin', fmtDate(u.lastLogin)) : t('users.never'))}</span></div>
+      <div class="user-plugins">${plugins.map((p) => { const pp = u.perms.plugins[p.id]; return `<label class="inline small"><input type="checkbox" data-uplug="${esc(p.id)}" ${pp?.access ? 'checked' : ''}> <span>${esc(p.name)}</span>${pp?.access ? ` <span class="muted">(${esc(t('users.scope.' + (pp.scope || 'owned')))}${pp.manage ? ', ' + esc(t('users.manage')) : ''})</span>` : ''}</label>` }).join('')}</div>
+      <div class="user-link reveal" hidden></div>
+    </div>
+    <div class="user-actions">
+      <label class="switch" title="${esc(t('users.active'))}"><input type="checkbox" data-uactive ${u.active ? 'checked' : ''}><span></span></label>
+      <button type="button" class="ghost small" data-ulink>${esc(t('users.loginLink'))}</button>
+      <button type="button" class="ghost small danger" data-udel>${esc(t('users.remove'))}</button>
+    </div>
+  </div>`).join('') : `<p class="muted">${esc(t('users.none'))}</p>`
+}
+$('#userAdd').addEventListener('submit', run(async (e) => {
+  e.preventDefault()
+  const f = e.target
+  const plugins = {}
+  for (const c of $$('input[name=plugin]:checked', f)) plugins[c.value] = { access: true, scope: 'all', manage: false }
+  await api('POST', '/v1/admin/users', { name: f.elements.name.value, phone: f.elements.phone.value || null, perms: { plugins } })
+  f.reset()
+  toast(t('saved'))
+  await loadUsersAdmin()
+}))
+$('#userList').addEventListener('change', run(async (e) => {
+  const row = e.target.closest('[data-uid]')
+  if (!row) return
+  const u = USERS.find((x) => x.id === row.dataset.uid)
+  if (e.target.matches('[data-uactive]')) await api('PUT', `/v1/admin/users/${encodeURIComponent(u.id)}`, { active: e.target.checked })
+  if (e.target.matches('[data-uplug]')) {
+    const id = e.target.dataset.uplug
+    // a new plugin opens on all its records; "only their own records" is set inside the plugin
+    const cur = u.perms.plugins[id] ?? { scope: u.source?.startsWith(id + ':') ? 'owned' : 'all', manage: false }
+    await api('PUT', `/v1/admin/users/${encodeURIComponent(u.id)}`, { perms: { plugins: { ...u.perms.plugins, [id]: { ...cur, access: e.target.checked } } } })
+  }
+  toast(t('saved'))
+  await loadUsersAdmin()
+}))
+$('#userList').addEventListener('click', run(async (e) => {
+  const row = e.target.closest('[data-uid]')
+  if (!row) return
+  const u = USERS.find((x) => x.id === row.dataset.uid)
+  if (e.target.closest('[data-ulink]')) {
+    const r = await api('POST', `/v1/admin/users/${encodeURIComponent(u.id)}/login-link`)
+    const out = row.querySelector('.user-link')
+    out.hidden = false
+    out.innerHTML = `<code>${esc(r.url)}</code><button type="button" class="small" data-copy="${esc(r.url)}">${esc(t('copy'))}</button><p class="muted small">${esc(t('users.linkHint', u.name))}</p>`
+  }
+  if (e.target.closest('[data-udel]')) {
+    if (!confirm(t('users.removeConfirm', u.name))) return
+    await api('DELETE', `/v1/admin/users/${encodeURIComponent(u.id)}`)
+    await loadUsersAdmin()
+  }
+}))
 async function loadSessions() {
   const s = await api('GET', '/v1/admin/sessions')
   $('#sessions').innerHTML = `<table><tr><th>${t('th.access')}</th><th>${t('th.created')}</th><th>${t('th.lastUsed')}</th><th></th></tr>${s.map((x) => `<tr><td>${esc(x.label)}</td><td>${fmtDate(x.created_at)}</td><td>${fmtDate(x.last_seen)}</td><td><button class="small danger" data-revoke-sess="${esc(x.id_hash)}">${esc(t('revoke'))}</button></td></tr>`).join('')}</table>`
@@ -869,12 +1021,27 @@ $('#mkLink').addEventListener('click', run(async () => { const r = await api('PO
 $('#restart').addEventListener('click', run(async () => { if (!confirm(t('confirm.restart'))) return; await api('POST', '/v1/admin/restart'); toast(t('svc.restarting')); setTimeout(() => location.reload(), 5000) }))
 
 // ---------------------------------------------------------------- boot
-const loaders = { numbers: loadOverview, 'connect/plugins': loadPlugins, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/db': loadDb, 'settings/log': loadLogs, 'settings/updates': loadUpdates, 'settings/feedback': loadFeedback, 'settings/license': loadLicense }
+const loaders = { numbers: loadOverview, 'connect/plugins': loadPlugins, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/users': loadUsersAdmin, 'settings/db': loadDb, 'settings/log': loadLogs, 'settings/updates': loadUpdates, 'settings/feedback': loadFeedback, 'settings/license': loadLicense }
 ;(async () => {
-  try { await loadOverview() } catch (e) { toast(e.message, true) }
-  startEvents()
+  try { state.me = await api('GET', '/v1/me') } catch { state.me = { role: 'owner' } }
+  if (isUser()) userMode()
+  else {
+    try { await loadOverview() } catch (e) { toast(e.message, true) }
+    startEvents()
+  }
   let route = location.hash.slice(1)
   route = LEGACY[route] ?? route
   const [tab, sub, item] = route.split('/')
   if (tab && $('#' + tab)?.classList.contains('tab')) showTab(tab, sub, item)
+  else if (isUser()) showTab('connect', 'plugins')
 })()
+/** A signed-in user sees only the plugins enabled for them: no numbers, no other connectors, no settings. */
+function userMode() {
+  document.body.classList.add('user-mode')
+  $$('#tabs [data-tab=numbers], #tabs [data-tab=settings]').forEach((b) => b.remove())
+  $$('.subnav[data-for=connect] [data-sub=mcp], .subnav[data-for=connect] [data-sub=api], .subnav[data-for=connect] [data-sub=hooks]').forEach((b) => b.remove())
+  $('#numbers')?.remove()
+  $('#settings')?.remove()
+  SUBS.connect = ['plugins']
+  $('#host').textContent = state.me.name + (state.me.phone ? ' · ' + state.me.phone : '')
+}

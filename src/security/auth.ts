@@ -36,20 +36,27 @@ export class AdminAuth {
   constructor(private h: DbHandle) {}
 
   // ----------------------------------------------------- sessions
-  async createSession(label: string): Promise<string> {
+  /** userId null = the owner (full access); otherwise a WhatsOps user with their own permissions. */
+  async createSession(label: string, userId: string | null = null): Promise<string> {
     const token = randomToken('was_')
-    await this.h.db.insertInto('admin_sessions').values({ id_hash: sha256(token), label: label.slice(0, 250), created_at: now(), expires_at: now() + SESSION_TTL, last_seen: now() }).execute()
+    await this.h.db.insertInto('admin_sessions').values({ id_hash: sha256(token), label: label.slice(0, 250), created_at: now(), expires_at: now() + SESSION_TTL, last_seen: now(), user_id: userId }).execute()
     return token
   }
 
-  async checkSession(token: string | undefined): Promise<boolean> {
-    if (!token || !token.startsWith('was_')) return false
+  async session(token: string | undefined): Promise<{ userId: string | null } | null> {
+    if (!token || !token.startsWith('was_')) return null
     const r = await this.h.db.selectFrom('admin_sessions').selectAll().where('id_hash', '=', sha256(token)).executeTakeFirst()
-    if (!r || r.expires_at < now()) return false
+    if (!r || r.expires_at < now()) return null
     if (now() - (r.last_seen ?? 0) > 3600_000) {
       await this.h.db.updateTable('admin_sessions').set({ last_seen: now(), expires_at: now() + SESSION_TTL }).where('id_hash', '=', r.id_hash).execute()
     }
-    return true
+    return { userId: (r as { user_id?: string | null }).user_id ?? null }
+  }
+
+  /** True only for the owner's sessions (users never pass: OAuth consent, admin pages). */
+  async checkSession(token: string | undefined): Promise<boolean> {
+    const s = await this.session(token)
+    return !!s && !s.userId
   }
 
   async deleteSession(token: string | undefined): Promise<void> {
@@ -58,7 +65,7 @@ export class AdminAuth {
   }
 
   async listSessions() {
-    return this.h.db.selectFrom('admin_sessions').select(['id_hash', 'label', 'created_at', 'last_seen', 'expires_at']).where('expires_at', '>', now()).orderBy('last_seen', 'desc').execute()
+    return this.h.db.selectFrom('admin_sessions').select(['id_hash', 'label', 'created_at', 'last_seen', 'expires_at', 'user_id']).where('expires_at', '>', now()).orderBy('last_seen', 'desc').execute()
   }
 
   async revokeSession(idHash: string) {
@@ -85,14 +92,16 @@ export class AdminAuth {
   }
 
   // ----------------------------------------------------- magic link / OTP
-  async createLoginToken(kind: 'link' | 'otp', ttlMs: number): Promise<string> {
-    const value = kind === 'otp' ? String(crypto.randomInt(0, 1_000_000)).padStart(6, '0') : randomToken('wal_', 24)
-    await this.h.db.insertInto('login_tokens').values({ hash: sha256(`${kind}:${value}`), kind, created_at: now(), expires_at: now() + ttlMs, used: 0 }).execute()
+  /** `otp`/`link` sign in the owner; `otpu`/`linku` sign in one user (the value is bound to the user id). */
+  async createLoginToken(kind: 'link' | 'otp' | 'linku' | 'otpu', ttlMs: number, userId?: string): Promise<string> {
+    const value = kind === 'otp' || kind === 'otpu' ? String(crypto.randomInt(0, 1_000_000)).padStart(6, '0') : randomToken('wal_', 24)
+    const bound = userId ? `${userId}:${value}` : value
+    await this.h.db.insertInto('login_tokens').values({ hash: sha256(`${kind}:${bound}`), kind, created_at: now(), expires_at: now() + ttlMs, used: 0 }).execute()
     await this.h.db.deleteFrom('login_tokens').where('expires_at', '<', now() - 86400_000).execute()
     return value
   }
 
-  async consumeLoginToken(kind: 'link' | 'otp', value: string, ip: string): Promise<boolean> {
+  async consumeLoginToken(kind: 'link' | 'otp' | 'linku' | 'otpu', value: string, ip: string): Promise<boolean> {
     const gk = `${kind}:${ip}`
     this.guard(gk)
     this.guard(`${kind}:*`)
@@ -100,7 +109,7 @@ export class AdminAuth {
     const r = await this.h.db.selectFrom('login_tokens').selectAll().where('hash', '=', hash).executeTakeFirst()
     if (!r || r.used || r.expires_at < now()) {
       this.fail(gk)
-      if (kind === 'otp') this.fail(`${kind}:*`)
+      if (kind === 'otp' || kind === 'otpu') this.fail(`${kind}:*`)
       return false
     }
     const res = await this.h.db.updateTable('login_tokens').set({ used: 1 }).where('hash', '=', hash).where('used', '=', 0).executeTakeFirst()
@@ -176,11 +185,13 @@ export class ApiKeys {
 
 // ----------------------------------------------------- principal
 export type Principal = {
-  kind: 'admin' | 'apikey' | 'oauth'
+  kind: 'admin' | 'apikey' | 'oauth' | 'user'
   id: string
   label: string
+  /** a signed-in user has no scope at all: only what their permissions grant (see users.ts) */
   scopes: Set<string>
   accounts: '*' | string[]
+  user?: import('../users.js').User
 }
 
 export function requestIp(req: FastifyRequest): string {

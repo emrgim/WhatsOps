@@ -24,6 +24,7 @@ import { Reports, recordCrashSync } from './reports.js'
 import { Updater } from './update.js'
 import { License } from './license.js'
 import { CurrentRmsPlugin } from './plugins/currentrms.js'
+import { Users } from './users.js'
 
 // a crash is written to disk first (Settings → Feedback offers to send it), then systemd/launchd restarts us
 process.on('uncaughtException', (e, origin) => {
@@ -160,6 +161,7 @@ async function main() {
     reports,
     updater,
     license,
+    users: new Users(h),
     plugins: {} as App['plugins'],
     // systemd (Restart=always) brings us back with the new configuration
     restart: (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref(),

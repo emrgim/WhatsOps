@@ -25,11 +25,12 @@ English and Italian: the config page follows the browser language, the server (M
 - **Crash and malfunction reports**: crashes and errors are kept (scrubbed of numbers, names, keys and paths) and sent only if you choose: ask first (default), send automatically, or don't collect. The same problem becomes one issue.
 - **Auto-update**: a `git clone` installation checks this repository's releases every 5 minutes, installs a new version by itself (fetch, `npm ci`, build, restart) and goes back to the previous one if the new one does not start. Installations with local changes are never touched.
 - **Plugins** (Connectors → Plugins). First one: **Current RMS** — see below.
+- **Users with granular permissions** (Settings → Users). Besides the owner, users sign in with a code sent to their own WhatsApp number and see only what is enabled for them: by default nothing. Today a user can be given plugins; inside each plugin, its own permissions (Current RMS: only the records they own, or all; manage the plugin or not). Users never get numbers, messages, API keys, MCP or settings, and cannot authorize MCP clients.
 - Service log in **Settings → Log**, terminal style (`tail -f`): live, searchable, filterable by level, downloadable; every API change and MCP tool call is listed (never message bodies). Also kept as a rotating file in `<data>/logs/`.
 
 ## MCP tools
 
-`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
+`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `currentrms_users`, `currentrms_user_invite`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
 
 ## Install (from source)
 
@@ -104,6 +105,12 @@ Links the discussions of [Current RMS](https://www.current-rms.com) (OnRent Even
    - People who can't be added (privacy settings) get the **invite link** privately (can be turned off).
 3. **Discussions**: listed by record, with participants and replies. Turning a discussion on creates the WhatsApp group (closed: only admins add people and change settings, approval on), adds the participants, posts the whole discussion grouped by day, then mirrors both ways: a new comment in Current RMS → a message in the group (`*Name*` + text); a message in the group → a comment in the discussion (as the matching contact when possible, otherwise `Name (WhatsApp): text`).
 4. **Instant updates**: turn webhooks on in Current RMS (System Setup → Company Information), then *Register webhooks*. WhatsOps must have a public HTTPS address (`WA_PUBLIC_URL`). Without webhooks, synced discussions are checked every 2 minutes.
+
+**Admins.** The main number (the default one unless chosen in the plugin) creates every group and Community, so it is their creator. Two more admins are added and promoted:
+- the **backup number** (another WhatsOps number): admin everywhere; while the main number is offline the sync goes on from the backup;
+- the **owner of the record** in Current RMS (e.g. whoever owns the opportunity), when they have a WhatsApp number — confirmed through their personal invite link, or in the contacts custom field. If the owner changes in Current RMS, the new owner is added as admin.
+
+**Current RMS users** (plugin → Users): send each one their personal invite link (valid 14 days): they type their WhatsApp number, receive a code on WhatsApp and confirm. From the same list the owner decides who signs in to WhatsOps, and whether they see only the records they own or all, and whether they manage the plugin. A user limited to their own records sees only those discussions and can switch only their sync.
 
 Groups are created one at a time with a pause between them, so WhatsApp does not see a burst. API calls stay under Current RMS' limit of 60 per minute. The same is available from the API (`/v1/plugins/currentrms/…`) and MCP (`currentrms_discussions`, `currentrms_set_sync`).
 
