@@ -1,8 +1,51 @@
-<p align="center"><img src="assets/logo.svg" width="96" alt="WhatsOps"></p>
+<p align="center">
+  <img src="assets/social/hero.png" width="700" alt="WhatsOps — your Current RMS & Rentman opportunities, right on your team's WhatsApp">
+</p>
 
-# WhatsOps
+<p align="center">
+  <b>Your Current RMS &amp; Rentman opportunities, right on your team's WhatsApp — automatically.</b><br>
+  Add someone to an opportunity and they join its WhatsApp group on their own.<br>
+  Two-way, in sync, no copy-paste. &nbsp;Open source · self-hosted · free.
+</p>
 
-> **Beta** — WhatsOps is in beta: versions are `0.0.x` (one number per release) and the page shows the build, e.g. `0.0.1 beta (build ae3a1dc)` = the git commit it was built from.
+<p align="center">
+  <img alt="Status: beta" src="https://img.shields.io/badge/status-beta-ff2bd6?style=flat-square">
+  <img alt="Open source: public code" src="https://img.shields.io/badge/open%20source-public%20code-00e0ff?style=flat-square">
+  <img alt="Self-hosted: your server" src="https://img.shields.io/badge/self--hosted-your%20server-00e0ff?style=flat-square">
+  <img alt="Price: free" src="https://img.shields.io/badge/price-free-00c853?style=flat-square">
+</p>
+
+<h3 align="center">⬇&nbsp;&nbsp;Download</h3>
+
+<p align="center">
+  <a href="https://github.com/emrgim/WhatsOps/releases/latest"><img alt="Download for macOS" src="https://img.shields.io/badge/macOS-Download-000000?style=for-the-badge&logo=apple&logoColor=white"></a>
+  &nbsp;
+  <a href="https://github.com/emrgim/WhatsOps/releases/latest"><img alt="Download for Windows" src="https://img.shields.io/badge/Windows-Download-0078D6?style=for-the-badge&logo=windows&logoColor=white"></a>
+  &nbsp;
+  <a href="https://github.com/emrgim/WhatsOps/releases/latest"><img alt="Download for Linux" src="https://img.shields.io/badge/Linux-Download-1A1A1A?style=for-the-badge&logo=linux&logoColor=white"></a>
+</p>
+
+<p align="center">
+  <sub>Node.js is bundled — nothing else to install. WhatsOps keeps running in the background and updates itself.<br>
+  Exact files and checksums for every system (Intel / ARM, <code>.deb</code> / <code>.rpm</code>): <a href="#install">all installers ↓</a></sub>
+</p>
+
+---
+
+## What it does
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/social/feature-connect.png" alt="Your rental software now speaks WhatsApp"></td>
+    <td width="50%"><img src="assets/social/feature-autojoin.png" alt="Add a person to the opportunity and they auto-join the WhatsApp group"></td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="assets/social/feature-integrations.png" alt="Current RMS, Rentman and the plugins you want"></td>
+    <td width="50%"><img src="assets/social/feature-privacy.png" alt="Self-hosted and open source: your data never leaves your server"></td>
+  </tr>
+</table>
+
+> **Beta — and that's the point.** WhatsOps is a free, open beta (versions `0.0.x`; the config page shows the exact build, e.g. `0.0.1 beta (build 45113d9)` = the git commit it was built from). Install it, try it, and tell us what works and what doesn't from **Settings → Feedback** — one click, no GitHub account needed.
 
 WhatsApp **REST API + MCP server** for your own numbers, built on [Baileys](https://baileys.wiki) v7 (WhatsApp Web linked device).
 
