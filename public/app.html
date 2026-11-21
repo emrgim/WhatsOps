@@ -13,11 +13,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="WhatsOps">
-<link id="omTheme" rel="stylesheet" href="/theme.css?v=42">
-<link rel="stylesheet" href="/static/base.css?v=42">
-<link rel="stylesheet" href="/static/app.css?v=42">
-<script src="/static/theme.js?v=42" defer></script>
-<script src="/static/i18n.js?v=42"></script>
+<link id="omTheme" rel="stylesheet" href="/theme.css?v=43">
+<link rel="stylesheet" href="/static/base.css?v=43">
+<link rel="stylesheet" href="/static/app.css?v=43">
+<script src="/static/theme.js?v=43" defer></script>
+<script src="/static/i18n.js?v=43"></script>
 </head>
 <body>
 <header>
@@ -28,7 +28,7 @@
     <button data-tab="settings" data-i18n="nav.settings"></button>
   </nav>
   <button id="logout" class="ghost small" data-i18n="logout"></button>
-  <div class="subbar"><div class="subnav" data-for="connect" hidden><button data-sub="plugins" class="on" data-i18n="sub.plugins"></button><button data-sub="mcp">MCP</button><button data-sub="api">API</button><button data-sub="hooks" data-i18n="nav.hooks"></button></div><div class="subnav" data-for="settings" hidden><button data-sub="general" class="on" data-i18n="sub.general"></button><button data-sub="users" data-i18n="sub.users"></button><button data-sub="updates" data-i18n="sub.updates"></button><button data-sub="db" data-i18n="nav.db"></button><button data-sub="log" data-i18n="nav.log"></button><button data-sub="voice" data-i18n="sub.voice"></button><button data-sub="feedback" data-i18n="nav.feedback"></button><button data-sub="license" data-i18n="nav.license" hidden></button></div></div>
+  <div class="subbar"><div class="subnav" data-for="connect" hidden><button data-sub="plugins" class="on" data-i18n="sub.plugins"></button><button data-sub="mcp">MCP</button><button data-sub="api">API</button><button data-sub="hooks" data-i18n="nav.hooks"></button></div><div class="subnav" data-for="settings" hidden><button data-sub="general" class="on" data-i18n="sub.general"></button><button data-sub="users" data-i18n="sub.users"></button><button data-sub="updates" data-i18n="sub.updates"></button><button data-sub="db" data-i18n="nav.db"></button><button data-sub="log" data-i18n="nav.log"></button><button data-sub="voice" data-i18n="sub.voice"></button><button data-sub="feedback" data-i18n="nav.feedback"></button><button data-sub="backup" data-i18n="sub.backup"></button><button data-sub="license" data-i18n="nav.license" hidden></button></div></div>
 </header>
 <main>
   <section id="numbers" class="tab on">
@@ -212,6 +212,40 @@
         <p class="muted small"><span data-i18n="fb.install"></span> <code id="fbCode"></code></p>
       </div>
     </div>
+    <div class="sub" id="settings-backup">
+    <form id="bakForm" class="card form">
+      <h3 data-i18n="bak.title"></h3>
+      <p class="muted small" data-i18n="bak.hint"></p>
+      <div class="row"><button type="button" id="bakDownload" data-i18n="bak.download"></button><button type="button" class="ghost" id="bakNow" data-i18n="bak.now"></button></div>
+      <p class="small" id="bakStatus"></p>
+      <span class="lbl" data-i18n="bak.every"></span>
+      <div class="seg" role="radiogroup">
+        <label><input type="radio" name="every" value="off"><span data-i18n="bak.e.off"></span></label>
+        <label><input type="radio" name="every" value="hour"><span data-i18n="bak.e.hour"></span></label>
+        <label><input type="radio" name="every" value="day"><span data-i18n="bak.e.day"></span></label>
+        <label><input type="radio" name="every" value="week"><span data-i18n="bak.e.week"></span></label>
+      </div>
+      <span class="lbl" data-i18n="bak.folder"></span>
+      <div class="folder-row"><input name="folder" spellcheck="false" autocomplete="off"><button type="button" class="ghost" id="bakBrowse" data-i18n="bak.browse"></button></div>
+      <div id="bakPicker" class="picker" hidden>
+        <div class="picker-head"><button type="button" class="ghost small" id="bakUp" data-i18n="bak.up"></button><code id="bakPath"></code></div>
+        <div class="picker-roots" id="bakRoots"></div>
+        <ul class="picker-list" id="bakDirs"></ul>
+        <div class="folder-row"><input id="bakNewName" spellcheck="false" autocomplete="off"><button type="button" class="ghost" id="bakMkdir" data-i18n="bak.mkdir"></button><button type="button" id="bakUse" data-i18n="bak.use"></button></div>
+      </div>
+      <p class="muted small" id="bakFolderHint"></p>
+      <label class="narrow"><span data-i18n="bak.keep"></span> <input name="keep" type="number" min="1" max="1000"></label>
+      <label><span data-i18n="bak.password"></span> <input name="password" type="password" autocomplete="new-password" spellcheck="false"></label>
+      <p class="muted small" id="bakPwHint"></p>
+      <div class="row"><button type="submit" data-i18n="save"></button><button type="button" class="ghost" id="bakPwRemove" data-i18n="bak.pwRemove" hidden></button></div>
+      <span class="lbl" data-i18n="bak.files"></span>
+      <div id="bakFiles"></div>
+      <span class="lbl" data-i18n="bak.restore"></span>
+      <p class="muted small" data-i18n="bak.restoreHint"></p>
+      <div class="folder-row"><input type="file" id="bakFile" accept=".whatsops"><input type="password" id="bakFilePw" autocomplete="off"><button type="button" class="danger" id="bakRestore" data-i18n="bak.restoreBtn"></button></div>
+      <p class="small" id="bakOut"></p>
+    </form>
+    </div>
     <div class="sub" id="settings-license">
       <form id="licForm" class="card form">
         <h3 data-i18n="lic.title"></h3>
@@ -293,6 +327,6 @@
 </dialog>
 
 <div id="toast"></div>
-<script src="/static/app.js?v=42"></script>
+<script src="/static/app.js?v=43"></script>
 </body>
 </html>

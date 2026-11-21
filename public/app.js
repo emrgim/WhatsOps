@@ -63,7 +63,7 @@ $$('.viewsw').forEach((w) => {
 
 // ---------------------------------------------------------------- tabs
 // top tabs: numbers · connectors (mcp / api / hooks) · settings (general / db)
-const SUBS = { connect: ['plugins', 'mcp', 'api', 'hooks'], settings: ['general', 'users', 'updates', 'db', 'log', 'voice', 'feedback', 'license'] }
+const SUBS = { connect: ['plugins', 'mcp', 'api', 'hooks'], settings: ['general', 'users', 'updates', 'db', 'log', 'voice', 'feedback', 'backup', 'license'] }
 const LEGACY = { keys: 'connect/api', hooks: 'connect/hooks', db: 'settings/db' }
 const lastSub = { connect: 'plugins', settings: 'general' }
 let routeItem = null // third part of the route: #connect/mcp/cursor
@@ -1345,6 +1345,134 @@ $('#voiceTest').addEventListener('click', run(async () => {
     out.textContent = x.message
   } finally { b.disabled = false; if (voiceCfg?.engine === 'local') loadVoice().catch(() => {}) }
 }))
+// ---------------------------------------------------------------- backup (Settings → Backup)
+let bakPickPath = null
+const fmtSize = (n) => (n >= 1e9 ? (n / 1e9).toFixed(1) + ' GB' : n >= 1e6 ? (n / 1e6).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1e3)) + ' KB')
+function bakRender(c) {
+  const f = $('#bakForm')
+  $$('input[name=every]', f).forEach((r) => { r.checked = r.value === c.every })
+  f.folder.value = c.folder
+  f.keep.value = c.keep
+  f.password.value = ''
+  f.password.placeholder = c.passwordSet ? t('rm.saved') : ''
+  $('#bakNewName').placeholder = t('bak.newName')
+  $('#bakFilePw').placeholder = t('bak.filePw')
+  $('#bakPwRemove').hidden = !c.passwordSet
+  $('#bakPwHint').textContent = t(c.passwordSet ? 'bak.pwOn' : 'bak.pwOff')
+  $('#bakFolderHint').textContent = c.folder === c.defaultFolder ? t('bak.folderDefault') : ''
+  const s = c.state
+  const lines = []
+  if (s.busy) lines.push(`<span class="muted">⏳ ${esc(t(s.busy === 'restore' ? 'bak.restoring' : 'bak.working'))}</span>`)
+  lines.push(s.lastAt ? `<span class="ok-text">✓ ${esc(t('bak.last', fmtDate(s.lastAt), s.lastSize ? fmtSize(s.lastSize) : '?'))}</span>` : `<span class="muted">${esc(t('bak.never'))}</span>`)
+  if (s.lastError && (!s.lastAt || s.lastErrorAt > s.lastAt)) lines.push(`<span class="err-text">${esc(t('bak.error', fmtDate(s.lastErrorAt), s.lastError))}</span>`)
+  lines.push(`<span class="muted">${esc(c.every === 'off' ? t('bak.autoOff') : t('bak.next', fmtDate(Math.max(s.nextAt || 0, Date.now()))))}</span>`)
+  $('#bakStatus').innerHTML = lines.join('<br>')
+  $('#bakFiles').innerHTML = c.files.length
+    ? `<table><tr><th>${esc(t('bak.th.date'))}</th><th>${esc(t('bak.th.kind'))}</th><th>${esc(t('bak.th.size'))}</th><th></th></tr>${c.files.map((x) => `<tr><td>${esc(fmtDate(x.createdAt))}${x.encrypted ? ` <span title="${esc(t('bak.locked'))}">🔒</span>` : ''}</td><td>${esc(t('bak.kind.' + (x.kind || 'manual')))}</td><td>${esc(fmtSize(x.size))}</td><td class="nowrap"><button type="button" class="small ghost" data-bak-dl="${esc(x.name)}">${esc(t('bak.dl'))}</button> <button type="button" class="small danger" data-bak-restore="${esc(x.name)}">${esc(t('bak.restoreOne'))}</button></td></tr>`).join('')}</table>`
+    : `<p class="muted small">${esc(t('bak.none'))}</p>`
+}
+async function loadBackup() { bakRender(await api('GET', '/v1/admin/backup')) }
+// downloads go through fetch so an error shows here instead of an error page
+async function bakFetchFile(url, btn) {
+  const label = btn.textContent
+  btn.disabled = true
+  btn.textContent = t('bak.preparing')
+  try {
+    const r = await fetch(url, { credentials: 'same-origin', headers: { 'accept-language': WA_LANG } })
+    if (!r.ok) { let j = null; try { j = await r.json() } catch {} ; throw new Error(j?.error?.message || `HTTP ${r.status}`) }
+    const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'whatsops-backup.whatsops'
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(await r.blob())
+    a.download = name
+    document.body.appendChild(a)
+    a.click()
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove() }, 1000)
+  } finally { btn.disabled = false; btn.textContent = label }
+}
+function bakRestored(r) {
+  const out = $('#bakOut')
+  out.className = 'small'
+  out.innerHTML = `<span class="ok-text">✓ ${esc(t('bak.restored', fmtDate(r.manifest.createdAt), r.counts.accounts ?? 0, r.counts.messages ?? 0, r.safetyCopy))}</span><br>${esc(t(r.restarting ? 'bak.restarting' : 'bak.restartNeeded'))}`
+  if (!r.restarting) return
+  // the old process answers for a moment: wait, then until the new one is up
+  const t0 = Date.now()
+  const poll = () => fetch('/healthz', { cache: 'no-store' }).then((x) => (x.ok ? location.reload() : Promise.reject())).catch(() => { if (Date.now() - t0 < 180_000) setTimeout(poll, 2000) })
+  setTimeout(poll, 5000)
+}
+function bakBusy(on) { $$('#bakForm button').forEach((b) => { b.disabled = on }) }
+$('#bakForm').addEventListener('submit', run(async (e) => {
+  e.preventDefault()
+  const f = e.target
+  const body = { every: f.querySelector('input[name=every]:checked')?.value || 'off', folder: f.folder.value.trim(), keep: Number(f.keep.value) || 10 }
+  if (f.password.value) body.password = f.password.value
+  bakRender(await api('PUT', '/v1/admin/backup', body))
+  toast(t('saved'))
+}))
+$('#bakPwRemove').addEventListener('click', run(async () => { bakRender(await api('PUT', '/v1/admin/backup', { removePassword: true })); toast(t('saved')) }))
+$('#bakNow').addEventListener('click', run(async () => {
+  bakBusy(true)
+  try { const r = await api('POST', '/v1/admin/backup/now'); bakRender(r); toast(t('bak.saved', r.file)) } finally { bakBusy(false) }
+}))
+$('#bakDownload').addEventListener('click', run(async () => { await bakFetchFile('/v1/admin/backup/download', $('#bakDownload')); loadBackup().catch(() => {}) }))
+$('#bakFiles').addEventListener('click', run(async (e) => {
+  const dl = e.target.closest('[data-bak-dl]')
+  if (dl) return bakFetchFile('/v1/admin/backup/files/' + encodeURIComponent(dl.dataset.bakDl), dl)
+  const rs = e.target.closest('[data-bak-restore]')
+  if (!rs || !confirm(t('bak.confirm'))) return
+  bakBusy(true)
+  try { bakRestored(await api('POST', '/v1/admin/backup/files/' + encodeURIComponent(rs.dataset.bakRestore) + '/restore', { password: $('#bakFilePw').value })) } finally { bakBusy(false) }
+}))
+$('#bakRestore').addEventListener('click', run(async () => {
+  const file = $('#bakFile').files[0]
+  if (!file) throw new Error(t('bak.pickFile'))
+  if (!confirm(t('bak.confirm'))) return
+  bakBusy(true)
+  const out = $('#bakOut')
+  out.className = 'small muted'
+  out.textContent = t('bak.restoring')
+  try {
+    const r = await fetch('/v1/admin/backup/restore', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/octet-stream', 'accept-language': WA_LANG, 'x-backup-password': encodeURIComponent($('#bakFilePw').value) }, body: file })
+    let j = null
+    try { j = await r.json() } catch {}
+    if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`)
+    bakRestored(j)
+  } catch (x) { out.className = 'small err-text'; out.textContent = x.message; throw x } finally { bakBusy(false) }
+}))
+// folder picker: the folders of the server
+async function bakPick(p) {
+  const l = await api('GET', '/v1/admin/backup/folders' + (p ? '?path=' + encodeURIComponent(p) : ''))
+  bakPickPath = l.path
+  $('#bakPath').textContent = l.path
+  $('#bakUp').disabled = !l.parent
+  $('#bakUp').dataset.to = l.parent || ''
+  $('#bakRoots').innerHTML = l.roots.length > 1 ? l.roots.map((r) => `<button type="button" class="ghost small" data-pick="${esc(r)}">${esc(r)}</button>`).join('') : ''
+  $('#bakDirs').innerHTML = l.dirs.length ? l.dirs.map((d) => `<li><button type="button" data-pick-sub="${esc(d)}">📁 ${esc(d)}</button></li>`).join('') : `<li class="muted">${esc(t('bak.empty'))}</li>`
+}
+$('#bakBrowse').addEventListener('click', run(async () => {
+  const pk = $('#bakPicker')
+  if (!pk.hidden) { pk.hidden = true; return }
+  await bakPick($('#bakForm').folder.value.trim()).catch(() => bakPick(''))
+  pk.hidden = false
+}))
+$('#bakUp').addEventListener('click', run(async (e) => { if (e.currentTarget.dataset.to) await bakPick(e.currentTarget.dataset.to) }))
+$('#bakPicker').addEventListener('click', run(async (e) => {
+  const sub = e.target.closest('[data-pick-sub]')
+  if (sub) return bakPick(bakPickPath.replace(/[\\/]+$/, '') + (bakPickPath.includes('\\') ? '\\' : '/') + sub.dataset.pickSub)
+  const root = e.target.closest('[data-pick]')
+  if (root) return bakPick(root.dataset.pick)
+}))
+$('#bakMkdir').addEventListener('click', run(async () => {
+  const name = $('#bakNewName').value.trim()
+  if (!name) return
+  const l = await api('POST', '/v1/admin/backup/folders', { parent: bakPickPath, name })
+  $('#bakNewName').value = ''
+  await bakPick(l.path)
+}))
+$('#bakUse').addEventListener('click', run(async () => {
+  bakRender(await api('PUT', '/v1/admin/backup', { folder: bakPickPath }))
+  $('#bakPicker').hidden = true
+  toast(t('bak.folderSet', bakPickPath))
+}))
 async function loadSettings() {
   loadSessions().catch(() => {})
   const s = await api('GET', '/v1/admin/settings')
@@ -1385,7 +1513,7 @@ $('#mkLink').addEventListener('click', run(async () => { const r = await api('PO
 $('#restart').addEventListener('click', run(async () => { if (!confirm(t('confirm.restart'))) return; await api('POST', '/v1/admin/restart'); toast(t('svc.restarting')); setTimeout(() => location.reload(), 5000) }))
 
 // ---------------------------------------------------------------- boot
-const loaders = { numbers: loadOverview, 'connect/plugins': loadPlugins, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/users': loadUsersAdmin, 'settings/db': loadDb, 'settings/log': loadLogs, 'settings/voice': () => loadVoice().catch((e) => { $('#voiceTestOut').textContent = e.message }), 'settings/updates': loadUpdates, 'settings/feedback': loadFeedback, 'settings/license': loadLicense }
+const loaders = { numbers: loadOverview, 'connect/plugins': loadPlugins, 'connect/mcp': loadConnect, 'connect/api': loadApi, 'connect/hooks': loadHooks, 'settings/general': loadSettings, 'settings/users': loadUsersAdmin, 'settings/db': loadDb, 'settings/log': loadLogs, 'settings/voice': () => loadVoice().catch((e) => { $('#voiceTestOut').textContent = e.message }), 'settings/updates': loadUpdates, 'settings/feedback': loadFeedback, 'settings/backup': loadBackup, 'settings/license': loadLicense }
 ;(async () => {
   try { state.me = await api('GET', '/v1/me') } catch { state.me = { role: 'owner' } }
   if (isUser()) userMode()

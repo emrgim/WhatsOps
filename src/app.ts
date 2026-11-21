@@ -15,6 +15,7 @@ import type { RentmanPlugin } from './plugins/rentman.js'
 import type { Users } from './users.js'
 import type { VoiceService } from './voice.js'
 import { AppError } from './util.js'
+import type { BackupService } from './backup.js'
 
 export type App = {
   h: DbHandle
@@ -31,6 +32,7 @@ export type App = {
   license: License
   users: Users
   voice: VoiceService
+  backup: BackupService
   plugins: { currentrms: CurrentRmsPlugin; rentman: RentmanPlugin }
   restart: (reason: string) => void
 }

@@ -29,6 +29,7 @@ import { CurrentRmsPlugin } from './plugins/currentrms.js'
 import { RentmanPlugin } from './plugins/rentman.js'
 import { VoiceService } from './voice.js'
 import { Users } from './users.js'
+import { BackupService } from './backup.js'
 
 // Slow or IPv4-only links: Node gives each address 250 ms to connect before giving up on it, so a
 // WhatsApp media server that takes a few seconds is never reached ("Media download failed: fetch
@@ -163,6 +164,13 @@ async function main() {
   }
 
   const updater = new Updater(h, settings, (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref())
+  // Settings → Backup: by hand or every hour / day / week; a restore restarts with the restored numbers
+  const backup = new BackupService(h, {
+    stopAccounts: () => accounts.stopAll(),
+    restart: (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref(),
+    supervised: () => updater.supervised(),
+  })
+  await backup.start()
   const app: App = {
     h,
     settings,
@@ -178,6 +186,7 @@ async function main() {
     license,
     users: new Users(h),
     voice,
+    backup,
     plugins: {} as App['plugins'],
     // systemd (Restart=always) brings us back with the new configuration
     restart: (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref(),

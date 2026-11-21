@@ -231,3 +231,17 @@ a.linkbtn{display:inline-block;flex:0 0 auto;border:1px solid var(--accent);padd
 a.linkbtn:hover{background:transparent;color:var(--accent)}
 /* Settings → Voice */
 .lbl{display:block;font-size:12px;color:var(--muted);margin:12px 0 0}
+/* Settings → Backup */
+.folder-row{display:flex;gap:8px;align-items:center;margin-top:6px}
+.folder-row input{flex:1;min-width:0;margin:0}
+.folder-row button{flex:0 0 auto;margin:0}
+.picker{border:1px solid var(--border);margin:8px 0;padding:8px 10px}
+.picker-head{display:flex;gap:10px;align-items:center}
+.picker-head code{font-size:12px;word-break:break-all}
+.picker-roots{display:flex;gap:6px;flex-wrap:wrap}
+.picker-roots:empty{display:none}
+.picker-list{list-style:none;margin:8px 0;padding:0;max-height:260px;overflow:auto;border-top:1px solid var(--border);border-bottom:1px solid var(--border)}
+.picker-list li button{all:unset;box-sizing:border-box;cursor:pointer;display:block;width:100%;padding:5px 6px;font-size:13px;color:var(--fg)}
+.picker-list li button:hover,.picker-list li button:focus-visible{background:var(--sel)}
+.picker-list .muted{padding:5px 6px;font-size:12px}
+td.nowrap{white-space:nowrap}

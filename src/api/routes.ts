@@ -20,6 +20,8 @@ import { currentTheme, desktopTheme } from '../theme.js'
 import { registerCurrentRms } from '../plugins/currentrms.js'
 import { registerRentman } from '../plugins/rentman.js'
 import { normPerms, phoneDigits, pluginAccess } from '../users.js'
+import type { Readable } from 'node:stream'
+import { listFolders, makeFolder } from '../backup.js'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -754,6 +756,91 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       return app.voice.publicConfig()
     },
   )
+  // ---- backup (Settings → Backup)
+  const sendBackupFile = (reply: import('fastify').FastifyReply, file: string, cleanup?: () => void) => {
+    const st = fs.createReadStream(file)
+    if (cleanup) st.on('close', cleanup)
+    return reply
+      .type('application/octet-stream')
+      .header('content-disposition', `attachment; filename="${path.basename(file)}"`)
+      .header('content-length', String(fs.statSync(file).size))
+      .header('cache-control', 'no-store')
+      .send(st)
+  }
+  const backupPassword = (v: unknown) => {
+    try {
+      return decodeURIComponent(String(v ?? ''))
+    } catch {
+      return String(v ?? '')
+    }
+  }
+  f.get('/v1/admin/backup', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Backup: settings, last / next automatic backup, backups in the folder' } }, async () => app.backup.publicConfig())
+  f.put(
+    '/v1/admin/backup',
+    {
+      preHandler: guard('admin'),
+      schema: {
+        ...tags('Admin'),
+        summary: 'Backup: how often (off, hour, day, week), folder of the server, how many to keep, optional password',
+        body: z.object({
+          every: z.enum(['off', 'hour', 'day', 'week']).optional(),
+          folder: z.string().max(1000).optional(),
+          keep: z.number().int().min(1).max(1000).optional(),
+          password: z.string().max(200).optional(),
+          removePassword: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req) => {
+      await app.backup.update(req.body)
+      return app.backup.publicConfig()
+    },
+  )
+  f.post('/v1/admin/backup/now', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Backup: make one now in the folder' } }, async () => {
+    const r = await app.backup.backupNow('manual')
+    return { file: path.basename(r.file), size: r.size, ...app.backup.publicConfig() }
+  })
+  f.get('/v1/admin/backup/download', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Backup: download a fresh backup file (.whatsops)' } }, async (_req, reply) => {
+    const r = await app.backup.forDownload()
+    return sendBackupFile(reply, r.file, r.cleanup)
+  })
+  f.get(
+    '/v1/admin/backup/files/:name',
+    { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Backup: download a backup of the folder', params: z.object({ name: z.string().max(200) }) } },
+    async (req, reply) => sendBackupFile(reply, app.backup.fileInFolder(req.params.name)),
+  )
+  f.post(
+    '/v1/admin/backup/files/:name/restore',
+    {
+      preHandler: guard('admin'),
+      schema: {
+        ...tags('Admin'),
+        summary: 'Backup: restore a backup of the folder (a copy of the current data is saved first; WhatsOps restarts)',
+        params: z.object({ name: z.string().max(200) }),
+        body: z.object({ password: z.string().max(200).optional() }).default({}),
+      },
+    },
+    async (req) => app.backup.restore(app.backup.fileInFolder(req.params.name), req.body?.password ?? ''),
+  )
+  f.get(
+    '/v1/admin/backup/folders',
+    { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Backup: folders of the server, to choose where backups go', querystring: z.object({ path: z.string().max(1000).optional() }) } },
+    async (req) => listFolders(req.query.path),
+  )
+  f.post(
+    '/v1/admin/backup/folders',
+    { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Backup: new folder', body: z.object({ parent: z.string().max(1000), name: z.string().max(200) }) } },
+    async (req) => listFolders(makeFolder(req.body.parent, req.body.name)),
+  )
+  // the backup file itself is the body (application/octet-stream), the password in x-backup-password (URI-encoded)
+  f.register(async (sub) => {
+    sub.addContentTypeParser('application/octet-stream', (_req, payload, done) => done(null, payload))
+    sub.post(
+      '/v1/admin/backup/restore',
+      { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Backup: restore from an uploaded file (body = the .whatsops file; a copy of the current data is saved first; WhatsOps restarts)' } },
+      async (req) => app.backup.restoreUpload(req.body as Readable, backupPassword(req.headers['x-backup-password'])),
+    )
+  })
   f.post('/v1/admin/voice/test', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Voice messages: try the engine on the latest voice message' } }, async () => app.voice.test())
 
   f.get('/v1/admin/settings', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Get settings' } }, async () => app.settings.get())
