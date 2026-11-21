@@ -20,6 +20,9 @@ function escLike(s: string): string {
 }
 
 export class WaService {
+  /** voice transcripts (set at start): attached to audio messages, searched with the text */
+  voice?: { attach(accountId: string, msgs: { id: string; chat: string; type: string; transcript?: string | null }[]): Promise<void>; search(accountId: string, op: 'like' | 'ilike', pattern: string, limit: number): Promise<{ chat_jid: string; msg_id: string }[]> }
+
   constructor(
     public h: DbHandle,
     public accounts: AccountManager,
@@ -133,16 +136,31 @@ export class WaService {
     const rows = (await q.orderBy('ts', 'desc').limit(Math.min(o.limit ?? 30, 500)).execute()) as MessageRow[]
     const msgs = []
     for (const r of rows.reverse()) msgs.push(await acc.summarize(r))
+    await this.voice?.attach(acc.id, msgs)
     return { chat, chatName: await acc.store.nameOf(chat), messages: msgs }
   }
 
   async searchMessages(acc: WaAccount, query: string, o: { chat?: string; limit?: number; since?: string }) {
-    let q = this.h.db.selectFrom('messages').selectAll().where('account_id', '=', acc.id).where('text', likeOp(this.h), `%${escLike(query)}%`)
-    if (o.chat) q = q.where('chat_jid', 'in', acc.store.aliases(await this.resolveChat(acc, o.chat)))
-    if (o.since) q = q.where('ts', '>=', Math.floor(Date.parse(o.since) / 1000))
-    const rows = (await q.orderBy('ts', 'desc').limit(Math.min(o.limit ?? 30, 200)).execute()) as MessageRow[]
+    const limit = Math.min(o.limit ?? 30, 200)
+    const pattern = `%${escLike(query)}%`
+    const chats = o.chat ? acc.store.aliases(await this.resolveChat(acc, o.chat)) : null
+    const since = o.since ? Math.floor(Date.parse(o.since) / 1000) : null
+    let q = this.h.db.selectFrom('messages').selectAll().where('account_id', '=', acc.id).where('text', likeOp(this.h), pattern)
+    if (chats) q = q.where('chat_jid', 'in', chats)
+    if (since) q = q.where('ts', '>=', since)
+    const rows = (await q.orderBy('ts', 'desc').limit(limit).execute()) as MessageRow[]
+    // what was said in voice messages is searchable too
+    const hits = (await this.voice?.search(acc.id, likeOp(this.h), pattern, limit)) ?? []
+    for (const hit of hits) {
+      if (chats && !chats.includes(hit.chat_jid)) continue
+      if (rows.some((r) => r.id === hit.msg_id && r.chat_jid === hit.chat_jid)) continue
+      const r = await acc.store.loadRow(hit.chat_jid, hit.msg_id)
+      if (r && (!since || r.ts >= since)) rows.push(r)
+    }
+    rows.sort((a, b) => b.ts - a.ts)
     const out = []
-    for (const r of rows) out.push(await acc.summarize(r))
+    for (const r of rows.slice(0, limit)) out.push(await acc.summarize(r))
+    await this.voice?.attach(acc.id, out)
     return out
   }
 

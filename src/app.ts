@@ -13,6 +13,7 @@ import type { License } from './license.js'
 import type { CurrentRmsPlugin } from './plugins/currentrms.js'
 import type { RentmanPlugin } from './plugins/rentman.js'
 import type { Users } from './users.js'
+import type { VoiceService } from './voice.js'
 import { AppError } from './util.js'
 
 export type App = {
@@ -29,6 +30,7 @@ export type App = {
   updater: Updater
   license: License
   users: Users
+  voice: VoiceService
   plugins: { currentrms: CurrentRmsPlugin; rentman: RentmanPlugin }
   restart: (reason: string) => void
 }

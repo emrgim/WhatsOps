@@ -15,7 +15,7 @@ import { logger } from '../log.js'
 import type { Settings } from '../settings.js'
 import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
-import { WaStore } from './store.js'
+import { audioInfo, WaStore } from './store.js'
 
 export type AccountRow = {
   id: string
@@ -694,8 +694,10 @@ export class WaAccount {
     return { phone: '+' + n, exists: !!r?.exists, jid: r?.jid ? bareJid(r.jid) : null, lid: lid ? bareJid(lid) : null }
   }
 
-  async summarize(r: { chat_jid: string; id: string; from_me: number; sender: string | null; ts: number; type: string; text: string | null; status: number | null }) {
+  async summarize(r: { chat_jid: string; id: string; from_me: number; sender: string | null; ts: number; type: string; text: string | null; status: number | null; raw?: string }) {
     const isGroup = r.chat_jid.endsWith('@g.us')
+    // voice notes: length and flag, so agents know there is something to listen to (whatsapp_transcribe_voice)
+    const audio = r.type === 'audioMessage' ? audioInfo(r.raw) : null
     return {
       id: r.id,
       chat: r.chat_jid,
@@ -711,6 +713,7 @@ export class WaAccount {
       text: r.text,
       hasMedia: ['imageMessage', 'videoMessage', 'audioMessage', 'documentMessage', 'stickerMessage', 'documentWithCaptionMessage', 'ptvMessage'].includes(r.type),
       status: r.status,
+      ...(audio ? { seconds: audio.seconds, voiceNote: audio.voiceNote } : {}),
     }
   }
 

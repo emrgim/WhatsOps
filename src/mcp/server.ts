@@ -11,7 +11,7 @@ import { localizeError, reqLang, tr, type Lang } from '../i18n.js'
 import { AppError } from '../util.js'
 import { LEVEL_TYPES } from '../plugins/currentrms.js'
 
-type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[]; isError?: boolean }
+type ToolResult = { content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string } | { type: 'audio'; data: string; mimeType: string })[]; isError?: boolean }
 
 function ok(data: unknown): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
@@ -234,7 +234,7 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   tool(
     'whatsapp_get_messages',
     'Read chat messages',
-    'Get messages of one chat in chronological order (oldest → newest). Use before/after (ISO date) to page.',
+    'Get messages of one chat in chronological order (oldest → newest). Use before/after (ISO date) to page. Voice messages (type audioMessage, with seconds) carry their transcript when it is ready; when transcript is null, call whatsapp_transcribe_voice to get what was said.',
     'read',
     {
       chat: z.string().describe(L('Phone number (+971…), JID or exact chat/contact name')),
@@ -250,7 +250,7 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   tool(
     'whatsapp_search_messages',
     'Search messages',
-    'Full-text search across stored WhatsApp messages (newest first).',
+    'Full-text search across stored WhatsApp messages (newest first), including what was said in transcribed voice messages.',
     'read',
     {
       query: z.string().min(1).describe(L('Text to search for')),
@@ -429,19 +429,53 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   tool(
     'whatsapp_download_media',
     'Download media',
-    'Get the media of a message: returns a temporary download link (1 h) and, for small images, the image itself.',
+    'Get the media of a message: returns a temporary download link (1 h) and, for small images, the image itself. For a voice or audio message it also returns what was said (transcript) and, with include_audio, the audio itself.',
     'read',
-    { message_id: z.string().describe(L('Message id')), chat: z.string().optional().describe(L('Chat: phone number, JID or exact chat name')), account },
+    {
+      message_id: z.string().describe(L('Message id')),
+      chat: z.string().optional().describe(L('Chat: phone number, JID or exact chat name')),
+      include_audio: z.boolean().optional().describe(L('For voice / audio messages: also return the audio itself (only for clients that can play or process audio; default false)')),
+      account,
+    },
     { readOnlyHint: true },
     async (a) => {
       const ac = acc(a.account)
       const m = await app.svc.downloadMedia(ac, a.chat, a.message_id)
       const row = a.chat ? await ac.store.loadRow(await app.svc.resolveChat(ac, a.chat), a.message_id) : await ac.store.loadById(a.message_id)
       const link = `${origin}/media/${app.svc.signMediaToken(ac.id, row?.chat_jid ?? '', a.message_id)}`
-      const info = { fileName: m.fileName, mimetype: m.mimetype, bytes: m.buf.length, url: link, expiresIn: '1h' }
+      const info: Record<string, unknown> = { fileName: m.fileName, mimetype: m.mimetype, bytes: m.buf.length, url: link, expiresIn: '1h' }
+      if (row?.type === 'audioMessage') {
+        // an agent that cannot hear still gets what was said
+        try {
+          const t = await app.voice.transcribe(ac, row.chat_jid, row.id)
+          Object.assign(info, { transcript: t.text, language: t.language, seconds: t.seconds })
+        } catch (e) {
+          info.transcript = null
+          info.transcriptError = e instanceof AppError ? localizeError(e, lang) : String((e as Error)?.message ?? e)
+        }
+      }
       const content: ToolResult['content'] = [{ type: 'text', text: JSON.stringify(info, null, 2) }]
       if (m.mimetype.startsWith('image/') && m.buf.length < 1_500_000) content.push({ type: 'image', data: m.buf.toString('base64'), mimeType: m.mimetype })
+      if (a.include_audio && m.mimetype.startsWith('audio/') && m.buf.length < 8_000_000) content.push({ type: 'audio', data: m.buf.toString('base64'), mimeType: m.mimetype })
       return { content }
+    },
+  )
+
+  tool(
+    'whatsapp_transcribe_voice',
+    'Listen to a voice message',
+    'Transcribe a WhatsApp voice or audio message (type audioMessage) to text, so you know what was said. Returns the transcript, the language and the length in seconds. Transcripts are kept: asking again is instant. Use force to transcribe again.',
+    'read',
+    {
+      message_id: z.string().describe(L('Message id')),
+      chat: z.string().optional().describe(L('Chat: phone number, JID or exact chat name')),
+      force: z.boolean().optional().describe(L('Transcribe again even if a transcript is already stored')),
+      account,
+    },
+    { readOnlyHint: true, openWorldHint: true },
+    async (a) => {
+      const t = await app.voice.transcribe(acc(a.account), a.chat, a.message_id, { force: a.force })
+      return { messageId: t.id, chat: t.chat, transcript: t.text, language: t.language, seconds: t.seconds, engine: t.engine, cached: t.cached }
     },
   )
 

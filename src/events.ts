@@ -25,7 +25,7 @@ export class EventBus extends EventEmitter {
   }
 }
 
-export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.update', 'connection.update', 'history.sync', 'chat.update', 'profile.update'] as const
+export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.transcribed', 'message.update', 'connection.update', 'history.sync', 'chat.update', 'profile.update'] as const
 
 const RETRY_DELAYS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 12 * 3600_000]
 
@@ -97,14 +97,28 @@ export function maskHookHeaders(stored: string | null | undefined): Record<strin
 
 /** One line in plain words: agents (Cursor / Grok Bot automations read `context`) see at once what happened. */
 export function describeEvent(ev: Pick<WaEvent, 'type' | 'account' | 'data'>): string {
-  const d = (ev.data ?? {}) as { chatName?: string | null; chatPhone?: string | null; senderName?: string | null; senderPhone?: string | null; text?: string | null; type?: string; hasMedia?: boolean; chat?: string; state?: string }
+  const d = (ev.data ?? {}) as { chatName?: string | null; chatPhone?: string | null; senderName?: string | null; senderPhone?: string | null; text?: string | null; type?: string; hasMedia?: boolean; chat?: string; state?: string; fromMe?: boolean; seconds?: number | null; voiceNote?: boolean; transcript?: string | null }
   const on = `+${String(ev.account).replace(/^\+/, '')}`
+  if ((ev.type === 'message.received' || ev.type === 'message.sent') && d.type === 'audioMessage') {
+    const who = [d.senderName, d.senderPhone].filter(Boolean).join(' ') || 'unknown'
+    const inGroup = d.chat?.endsWith('@g.us') ? ` in the group "${d.chatName ?? d.chat}"` : ''
+    const what = `${d.voiceNote === false ? 'Audio' : 'Voice'} message${d.seconds ? ` (${d.seconds} s)` : ''}`
+    const next = ' — the text follows in message.transcribed when transcription is on, or call whatsapp_transcribe_voice'
+    return ev.type === 'message.received' ? `${what} received on ${on} from ${who}${inGroup}${next}` : `${what} sent from ${on}${inGroup}${next}`
+  }
   if (ev.type === 'message.received' || ev.type === 'message.sent') {
     const who = [d.senderName, d.senderPhone].filter(Boolean).join(' ') || 'unknown'
     const inGroup = d.chat?.endsWith('@g.us') ? ` in the group "${d.chatName ?? d.chat}"` : ''
     const to = ev.type === 'message.sent' ? ` to ${[d.chatName, d.chatPhone].filter(Boolean).join(' ') || d.chat}` : ''
     const body = d.text ? `: ${d.text.length > 1500 ? `${d.text.slice(0, 1500)}…` : d.text}` : d.hasMedia ? ` (${d.type ?? 'media'} without text)` : ''
     return ev.type === 'message.received' ? `WhatsApp message received on ${on} from ${who}${inGroup}${body}` : `WhatsApp message sent from ${on}${to}${inGroup}${body}`
+  }
+  if (ev.type === 'message.transcribed') {
+    const who = [d.senderName, d.senderPhone].filter(Boolean).join(' ') || 'unknown'
+    const inGroup = d.chat?.endsWith('@g.us') ? ` in the group "${d.chatName ?? d.chat}"` : ''
+    const len = d.seconds ? ` (${d.seconds} s)` : ''
+    const said = d.transcript ? `: ${d.transcript.length > 3000 ? `${d.transcript.slice(0, 3000)}…` : d.transcript}` : ' (no words)'
+    return d.fromMe ? `Voice message${len} sent from ${on}${inGroup}, transcribed${said}` : `Voice message${len} received on ${on} from ${who}${inGroup}, transcribed${said}`
   }
   if (ev.type === 'webhook.test') return `Test event from WhatsOps (${on}): the webhook works.`
   if (ev.type === 'connection.update') return `WhatsApp number ${on}: connection ${d.state ?? 'changed'}`

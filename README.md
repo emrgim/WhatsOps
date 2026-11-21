@@ -26,11 +26,13 @@ English and Italian: the config page follows the browser language, the server (M
 - **Auto-update**: a `git clone` installation checks this repository's releases every 5 minutes, installs a new version by itself (fetch, `npm ci`, build, restart) and goes back to the previous one if the new one does not start. Installations with local changes are never touched.
 - **Plugins** (Connectors → Plugins): **Current RMS** and **Rentman** — see below.
 - **Users with granular permissions** (Settings → Users). Besides the owner, users sign in with a code sent to their own WhatsApp number and see only what is enabled for them: by default nothing. Today a user can be given plugins; inside each plugin, its own permissions (Current RMS: only the records they own, or all; Rentman: only the projects they created, or all; manage the plugin or not). Users never get numbers, messages, API keys, MCP or settings, and cannot authorize MCP clients.
+- **Voice messages → text** (Settings → General → Voice messages): agents cannot hear, so WhatsOps transcribes voice notes — on this computer with [faster-whisper](https://github.com/SYSTRAN/faster-whisper) (free, nothing leaves the computer), with an online service (xAI, OpenAI, Groq or any OpenAI-compatible one) or with any command you choose. New voice notes can be transcribed as they arrive; transcripts are stored once and show up in `whatsapp_get_messages`, in search and in the webhook event `message.transcribed`.
+- **Web app**: WhatsOps installs as an app (its own window and icon) from Chrome / Edge / Chromium, on iPhone and Android (Add to Home Screen) and as an **Omarchy web app** — see *Install as an app* below.
 - Service log in **Settings → Log**, terminal style (`tail -f`): live, searchable, filterable by level, downloadable; every API change and MCP tool call is listed (never message bodies). Also kept as a rotating file in `<data>/logs/`.
 
 ## MCP tools
 
-`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `currentrms_users`, `currentrms_user_invite`, `currentrms_record_group`, `rentman_projects`, `rentman_project_group`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
+`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `currentrms_users`, `currentrms_user_invite`, `currentrms_record_group`, `rentman_projects`, `rentman_project_group`, `whatsapp_transcribe_voice`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
 
 ## Install
 
@@ -90,6 +92,29 @@ Open it, go to **Numbers → Add number**, and link the phone with the QR code o
 
 Run it as a service: `deploy/mcp-mrg-whatsops.service` is a systemd user unit (adjust the paths, see the comments inside). Auto-update restarts the service by itself, so keep a service manager with automatic restart (systemd `Restart=always`, launchd `KeepAlive`).
 
+### Install as an app
+
+The config page is a web app (manifest + icons), so it can live in its own window:
+- **Chrome, Edge, Chromium**: the install icon at the right of the address bar, or *Settings → General → WhatsOps as an app → Install WhatsOps*.
+- **Omarchy**: menu → *Install → Web App* (name `WhatsOps`, the address of your WhatsOps, icon `<address>/whatsops.png`), or in a terminal:
+  ```bash
+  omarchy-webapp-install "WhatsOps" "https://whatsops.example.com" "https://whatsops.example.com/whatsops.png"
+  ```
+  The Omarchy install script above already creates it for the WhatsOps on the same computer. The window bar follows the WhatsOps appearance (and the Omarchy theme with *System*).
+- **iPhone / Android**: Share → *Add to Home Screen*.
+
+### Voice messages
+
+Settings → General → **Voice messages**, pick the engine:
+
+| Engine | What it needs | Where the audio goes |
+|---|---|---|
+| **On this computer** | `pip install faster-whisper` (Python 3.9+); the model (`small` ≈ 500 MB) downloads the first time | nowhere |
+| **Online service** | API key of xAI (`grok-voice-transcribe-2.0`), OpenAI (`gpt-4o-mini-transcribe`), Groq (`whisper-large-v3-turbo`) or any OpenAI-compatible service (`/audio/transcriptions`) | to that service |
+| **Command** | any program that prints the text: `{file}` is the audio file (`.ogg`), `{lang}` the language or `auto` | wherever the program sends it |
+
+Agents then read voice messages like text: `whatsapp_get_messages` gives each voice note its `seconds` and `transcript` (null until transcribed), `whatsapp_transcribe_voice` transcribes one on request (stored, so asking again is instant), `whatsapp_download_media` adds the transcript for audio (and the audio itself with `include_audio`), `whatsapp_search_messages` also finds words said in voice notes. API: `POST /v1/messages/{id}/transcribe`. With *Transcribe new voice messages as they arrive* on, every new voice note is transcribed by itself and webhooks receive `message.transcribed` with the text in `data.transcript` and `context`.
+
 ### Expose it
 
 WhatsOps listens on loopback only. Put it behind a reverse proxy or tunnel (Caddy, nginx, Cloudflare Tunnel…) with HTTPS and set the public URL (`WA_PUBLIC_URL` or Settings → General). OAuth and the MCP connectors need the public HTTPS URL.
@@ -115,7 +140,7 @@ The full API vocabulary is in **Connectors → API** and at `/docs`.
 
 ### Webhooks
 
-Events: `message.received`, `message.sent`, `message.update`, `connection.update`, `history.sync`, `chat.update`, `profile.update` (or `*`). Each delivery is a JSON `POST` signed with
+Events: `message.received`, `message.sent`, `message.transcribed` (the text of a voice message), `message.update`, `connection.update`, `history.sync`, `chat.update`, `profile.update` (or `*`). Each delivery is a JSON `POST` signed with
 `X-WA-Signature: sha256=HMAC(secret, X-WA-Timestamp + "." + body)` and retried up to 5 times (1 min → 12 h). Live events are also available as SSE at `/v1/events`.
 
 Body: `{ id, type, account, at, context, data }` — `context` is one line in plain words (e.g. `WhatsApp message received on +971… from Mario +39…: ciao`), which agents such as Cursor / Grok Bot automations read together with their prompt.

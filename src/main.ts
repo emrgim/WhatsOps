@@ -25,6 +25,7 @@ import { Updater } from './update.js'
 import { License } from './license.js'
 import { CurrentRmsPlugin } from './plugins/currentrms.js'
 import { RentmanPlugin } from './plugins/rentman.js'
+import { VoiceService } from './voice.js'
 import { Users } from './users.js'
 
 // a crash is written to disk first (Settings → Feedback offers to send it), then systemd/launchd restarts us
@@ -89,6 +90,9 @@ async function main() {
   const oauth = new OAuthServer(h, settings, admin)
   const webhooks = new WebhookDispatcher(h, bus)
   await webhooks.start()
+  const voice = new VoiceService(h, bus, accounts, svc)
+  await voice.start()
+  svc.voice = voice
   const reports = new Reports(h, settings, () => ({
     Database: h.dialect,
     Numbers: String(accounts.list().length),
@@ -139,6 +143,7 @@ async function main() {
     const t = setTimeout(() => process.exit(code), 10_000)
     t.unref()
     try {
+      voice.stop()
       await accounts.stopAll()
       await fastify.close()
       await h.close()
@@ -164,6 +169,7 @@ async function main() {
     updater,
     license,
     users: new Users(h),
+    voice,
     plugins: {} as App['plugins'],
     // systemd (Restart=always) brings us back with the new configuration
     restart: (reason) => setTimeout(() => void shutdown(0, `restart: ${reason}`), 400).unref(),

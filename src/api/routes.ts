@@ -68,6 +68,46 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   f.get('/favicon-32.png', { schema: { hide: true } }, sendFile('favicon-32.png', 'image/png'))
   f.get('/favicon-192.png', { schema: { hide: true } }, sendFile('favicon-192.png', 'image/png'))
   f.get('/logo.svg', { schema: { hide: true } }, sendFile('favicon.svg', 'image/svg+xml'))
+  f.get('/logo-512.png', { schema: { hide: true } }, sendFile('logo-512.png', 'image/png'))
+  // same image under a name that becomes the icon name in an Omarchy web app launcher
+  f.get('/whatsops.png', { schema: { hide: true } }, sendFile('logo-512.png', 'image/png'))
+  f.get('/icon-maskable-192.png', { schema: { hide: true } }, sendFile('icon-maskable-192.png', 'image/png'))
+  f.get('/icon-maskable-512.png', { schema: { hide: true } }, sendFile('icon-maskable-512.png', 'image/png'))
+  f.get('/apple-touch-icon.png', { schema: { hide: true } }, sendFile('apple-touch-icon.png', 'image/png'))
+  // web app (PWA): installable from Chrome / Edge / Chromium, and as an Omarchy web app
+  f.get('/manifest.webmanifest', { schema: { hide: true } }, async (req, reply) => {
+    const th = currentTheme(app.settings.get().appearance)
+    const color = (k: string, d: string) => th.css.match(new RegExp(`--wo-${k}:\\s*(#[0-9a-fA-F]{3,8})`))?.[1] ?? d
+    const it = reqLang(req) === 'it'
+    return reply
+      .type('application/manifest+json; charset=utf-8')
+      .header('cache-control', 'no-cache')
+      .send({
+        id: '/',
+        name: 'WhatsOps',
+        short_name: 'WhatsOps',
+        description: it ? 'I tuoi numeri WhatsApp: MCP, API REST e plugin' : 'Your WhatsApp numbers: MCP, REST API and plugins',
+        lang: it ? 'it' : 'en',
+        start_url: '/',
+        scope: '/',
+        display: 'standalone',
+        background_color: color('background', '#121212'),
+        theme_color: color('bar', color('background', '#121212')),
+        categories: ['business', 'productivity', 'utilities'],
+        icons: [
+          { src: '/favicon.svg?v=2', sizes: 'any', type: 'image/svg+xml', purpose: 'any' },
+          { src: '/favicon-192.png?v=2', sizes: '192x192', type: 'image/png', purpose: 'any' },
+          { src: '/logo-512.png?v=2', sizes: '512x512', type: 'image/png', purpose: 'any' },
+          { src: '/icon-maskable-192.png?v=1', sizes: '192x192', type: 'image/png', purpose: 'maskable' },
+          { src: '/icon-maskable-512.png?v=1', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+        ],
+        shortcuts: [
+          { name: it ? 'Numeri' : 'Numbers', url: '/#numbers' },
+          { name: it ? 'Plugin' : 'Plugins', url: '/#connect/plugins' },
+          { name: it ? 'Impostazioni' : 'Settings', url: '/#settings/general' },
+        ],
+      })
+  })
   f.get('/static/app.js', { schema: { hide: true } }, sendFile('app.js', 'application/javascript; charset=utf-8', 60))
   f.get('/static/i18n.js', { schema: { hide: true } }, sendFile('i18n.js', 'application/javascript; charset=utf-8', 60))
   f.get('/static/app.css', { schema: { hide: true } }, sendFile('app.css', 'text/css; charset=utf-8', 60))
@@ -499,6 +539,23 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     },
   )
 
+  f.post(
+    '/v1/messages/:id/transcribe',
+    {
+      preHandler: guard('read'),
+      schema: {
+        ...tags('Messages'),
+        summary: 'What was said in a voice or audio message (transcript, kept once made)',
+        params: z.object({ id: z.string() }),
+        body: z.object({ chat: z.string().optional(), force: z.boolean().optional(), account: acct }).default({}),
+      },
+    },
+    async (req) => {
+      const t = await app.voice.transcribe(accountFor(app, P(req), req.body.account), req.body.chat, req.params.id, { force: req.body.force })
+      return { messageId: t.id, chat: t.chat, transcript: t.text, language: t.language, seconds: t.seconds, engine: t.engine, cached: t.cached }
+    },
+  )
+
   f.get('/v1/contacts', { preHandler: guard('read'), schema: { ...tags('Contacts'), summary: 'Find contacts/chats by name or number', querystring: z.object({ q: z.string().min(1), limit: z.coerce.number().int().min(1).max(100).optional(), account: acct }) } }, async (req) =>
     app.svc.findContacts(accountFor(app, P(req), req.query.account), req.query.q, req.query.limit ?? 20),
   )
@@ -649,6 +706,35 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     app.license.activate(req.body.key),
   )
   f.delete('/v1/admin/license', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Remove the license from this installation' } }, async () => app.license.deactivate())
+
+  // ---- voice messages → text
+  f.get('/v1/admin/voice', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Voice messages: transcription engine and its state' } }, async () => app.voice.publicConfig())
+  f.put(
+    '/v1/admin/voice',
+    {
+      preHandler: guard('admin'),
+      schema: {
+        ...tags('Admin'),
+        summary: 'Voice messages: choose the transcription engine (off, local faster-whisper, command, online service)',
+        body: z.object({
+          engine: z.enum(['off', 'local', 'command', 'api']).optional(),
+          model: z.string().max(80).optional(),
+          command: z.string().max(1000).optional(),
+          provider: z.enum(['xai', 'openai', 'groq', 'custom']).optional(),
+          apiUrl: z.string().max(300).optional(),
+          apiKey: z.string().max(500).optional(),
+          apiModel: z.string().max(120).optional(),
+          language: z.string().max(8).optional(),
+          auto: z.boolean().optional(),
+        }),
+      },
+    },
+    async (req) => {
+      await app.voice.update(req.body)
+      return app.voice.publicConfig()
+    },
+  )
+  f.post('/v1/admin/voice/test', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Voice messages: try the engine on the latest voice message' } }, async () => app.voice.test())
 
   f.get('/v1/admin/settings', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Get settings' } }, async () => app.settings.get())
   f.put(

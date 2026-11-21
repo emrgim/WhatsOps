@@ -76,6 +76,18 @@ export function parseMessage(raw: string): WAMessage {
   return msg
 }
 
+/** Seconds and "voice note" flag of an audio message (null for other messages). */
+export function audioInfo(raw: string | null | undefined): { seconds: number | null; voiceNote: boolean } | null {
+  if (!raw) return null
+  try {
+    const a = normalizeMessageContent(parseMessage(raw).message)?.audioMessage
+    if (!a) return null
+    return { seconds: a.seconds != null ? Number(a.seconds) : null, voiceNote: !!a.ptt }
+  } catch {
+    return null
+  }
+}
+
 export class WaStore {
   private lidCache = new Map<string, string>() // lid -> pn
   private pnCache = new Map<string, string>() // pn -> lid

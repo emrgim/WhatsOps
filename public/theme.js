@@ -7,9 +7,18 @@
     const link = document.createElement('link')
     link.rel = 'stylesheet'
     link.href = '/theme.css?h=' + hash
-    link.onload = () => { old.remove(); link.id = 'omTheme' }
+    link.onload = () => { old.remove(); link.id = 'omTheme'; bar() }
     old.after(link)
   }
+  // installed app (PWA / Omarchy web app): the window bar takes the color of the page header
+  const bar = () => {
+    const m = document.querySelector('meta[name=theme-color]')
+    if (!m) return
+    const el = document.querySelector('header') || document.body
+    const c = el && getComputedStyle(el).backgroundColor
+    if (c && c !== 'rgba(0, 0, 0, 0)' && c !== 'transparent') m.content = c
+  }
+  window.addEventListener('load', bar)
   const check = async () => {
     try {
       const r = await fetch('/theme.json', { cache: 'no-store' })

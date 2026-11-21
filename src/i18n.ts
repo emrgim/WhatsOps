@@ -93,6 +93,7 @@ const EN: Record<string, string> = {
 - Resolve people with whatsapp_find_contact before sending when you only have a name.
 - Messages are sent as the owner: confirm wording and recipient with the user before calling a send tool unless they explicitly asked you to send.
 - Use whatsapp_accounts to see which numbers are connected; pass "account" to pick a non-default number.
+- Voice messages (type audioMessage): read their transcript, or call whatsapp_transcribe_voice to know what was said.
 - Reply to the user in their language.`,
   '@otp': '🔐 WhatsOps login code: *{0}*\nValid for 5 minutes. If you did not request it, ignore this message.',
   '@otp_user': '🔐 WhatsOps — {1}, your login code: *{0}*\nValid for 5 minutes. If you did not request it, ignore this message.',
@@ -110,6 +111,7 @@ const IT: Record<string, string> = {
 - Se hai solo un nome, risolvi la persona con whatsapp_find_contact prima di inviare.
 - I messaggi partono a nome del proprietario: conferma testo e destinatario con l'utente prima di usare uno strumento di invio, salvo che te l'abbia chiesto esplicitamente.
 - whatsapp_accounts mostra i numeri collegati; passa "account" per usare un numero diverso da quello predefinito.
+- Messaggi vocali (tipo audioMessage): leggi la trascrizione, oppure usa whatsapp_transcribe_voice per sapere cosa è stato detto.
 - Rispondi all'utente nella sua lingua.`,
   '@otp': '🔐 Codice di accesso WhatsOps: *{0}*\nValido 5 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',
   '@otp_user': '🔐 WhatsOps — {1}, il tuo codice di accesso: *{0}*\nValido 5 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',
@@ -380,6 +382,28 @@ const IT: Record<string, string> = {
   'true = create the groups, false = stop managing them': 'true = crea i gruppi, false = smetti di gestirli',
   'Connect Rentman first (API token)': 'Collega prima Rentman (token API)',
   'The country calling code has 1 to 4 digits (e.g. 39, 31, 971)': 'Il prefisso internazionale ha da 1 a 4 cifre (es. 39, 31, 971)',
+  // voice messages
+  'Listen to a voice message': 'Ascolta un messaggio vocale',
+  'Transcribe a WhatsApp voice or audio message (type audioMessage) to text, so you know what was said. Returns the transcript, the language and the length in seconds. Transcripts are kept: asking again is instant. Use force to transcribe again.': 'Trascrive in testo un messaggio vocale o audio di WhatsApp (tipo audioMessage), così sai cosa è stato detto. Restituisce la trascrizione, la lingua e la durata in secondi. Le trascrizioni restano salvate: richiederle di nuovo è immediato. Usa force per trascrivere di nuovo.',
+  'Transcribe again even if a transcript is already stored': 'Trascrivi di nuovo anche se la trascrizione è già salvata',
+  'For voice / audio messages: also return the audio itself (only for clients that can play or process audio; default false)': 'Per i messaggi vocali / audio: restituisci anche l\'audio (solo per i client che sanno riprodurlo o elaborarlo; predefinito false)',
+  'Get the media of a message: returns a temporary download link (1 h) and, for small images, the image itself. For a voice or audio message it also returns what was said (transcript) and, with include_audio, the audio itself.': 'Ottieni il media di un messaggio: restituisce un link di download temporaneo (1 h) e, per le immagini piccole, l\'immagine stessa. Per un messaggio vocale o audio restituisce anche cosa è stato detto (trascrizione) e, con include_audio, l\'audio stesso.',
+  'Get messages of one chat in chronological order (oldest → newest). Use before/after (ISO date) to page. Voice messages (type audioMessage, with seconds) carry their transcript when it is ready; when transcript is null, call whatsapp_transcribe_voice to get what was said.': 'Messaggi di una chat in ordine cronologico (dal più vecchio al più recente). Usa before/after (data ISO) per scorrere. I messaggi vocali (tipo audioMessage, con seconds) portano la trascrizione quando è pronta; se transcript è null, usa whatsapp_transcribe_voice per sapere cosa è stato detto.',
+  'Full-text search across stored WhatsApp messages (newest first), including what was said in transcribed voice messages.': 'Ricerca nel testo dei messaggi WhatsApp salvati (dal più recente), compreso ciò che è stato detto nei messaggi vocali trascritti.',
+  'Voice transcription is off: choose an engine in Settings → General → Voice messages': 'La trascrizione dei vocali è spenta: scegli un motore in Impostazioni → Generali → Messaggi vocali',
+  'faster-whisper is not installed on this computer (pip install faster-whisper)': 'faster-whisper non è installato su questo computer (pip install faster-whisper)',
+  'Transcription failed: {0}': 'Trascrizione non riuscita: {0}',
+  'Transcription took too long': 'La trascrizione ha impiegato troppo tempo',
+  'This message is not a voice or audio message': 'Questo messaggio non è un vocale né un audio',
+  'Unknown transcription engine': 'Motore di trascrizione sconosciuto',
+  'Not a valid model name': 'Nome del modello non valido',
+  'Unknown transcription service': 'Servizio di trascrizione sconosciuto',
+  'The service address must start with https://': 'L\'indirizzo del servizio deve iniziare con https://',
+  'Language: auto or a two-letter code (it, en, …)': 'Lingua: auto oppure un codice di due lettere (it, en, …)',
+  'Write the command that transcribes the file ({file})': 'Scrivi il comando che trascrive il file ({file})',
+  'The command must contain {file} where the audio file goes': 'Il comando deve contenere {file} dove va il file audio',
+  'Write the address of the transcription service': 'Scrivi l\'indirizzo del servizio di trascrizione',
+  'Paste the API key of the transcription service': 'Incolla la chiave API del servizio di trascrizione',
   'Not a valid header name: {0}': 'Nome di header non valido: {0}',
   'WhatsOps sets the header {0} itself': 'L\'header {0} lo imposta WhatsOps',
   'The value of the header {0} is empty or not valid': 'Il valore dell\'header {0} è vuoto o non valido',

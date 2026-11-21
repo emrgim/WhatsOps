@@ -1242,8 +1242,89 @@ $('#licForm').addEventListener('submit', run(async (e) => { e.preventDefault(); 
 $('#licRemove').addEventListener('click', run(async () => renderLicense(await api('DELETE', '/v1/admin/license'))))
 
 // ---------------------------------------------------------------- settings
+// ---------------------------------------------------------------- WhatsOps as an app (PWA / Omarchy web app)
+let installEvt = null
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if ($('#appCard')) appCardState() })
+window.addEventListener('appinstalled', () => { installEvt = null; if ($('#appCard')) appCardState(true) })
+function appCardState(justInstalled) {
+  const standalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: window-controls-overlay)').matches
+  $('#appInstall').hidden = !installEvt || standalone
+  $('#appState').textContent = standalone ? t('app.inApp') : justInstalled ? t('app.installed') : installEvt ? '' : t('app.browserMenu')
+  const origin = (state.overview?.publicUrl || location.origin).replace(/\/+$/, '')
+  const cmd = `omarchy-webapp-install "WhatsOps" "${origin}" "${origin}/whatsops.png"`
+  $('#appCmd').textContent = cmd
+  $('#appCmdCopy').dataset.copy = cmd
+}
+$('#appInstall').addEventListener('click', run(async () => {
+  if (!installEvt) return
+  const ev = installEvt
+  ev.prompt()
+  const r = await ev.userChoice
+  installEvt = null
+  appCardState(r.outcome === 'accepted')
+}))
+// ---------------------------------------------------------------- voice messages → text (Settings → General)
+let voiceCfg = null
+function voiceShow() {
+  const f = $('#voiceForm')
+  const e = f.querySelector('input[name=engine]:checked')?.value || 'off'
+  $$('[data-voice]', f).forEach((d) => { d.hidden = d.dataset.voice === 'on' ? e === 'off' : d.dataset.voice !== e })
+  $('#voiceEngineHint').textContent = t('voice.eh.' + e)
+  const p = voiceCfg?.providers?.[f.provider.value]
+  f.apiUrl.placeholder = p?.url || 'https://…/v1'
+  f.apiModel.placeholder = p?.model || ''
+}
+async function loadVoice() {
+  const c = (voiceCfg = await api('GET', '/v1/admin/voice'))
+  const f = $('#voiceForm')
+  $$('input[name=engine]', f).forEach((r) => { r.checked = r.value === c.engine })
+  f.model.innerHTML = c.models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('')
+  if (!c.models.includes(c.model)) f.model.insertAdjacentHTML('beforeend', `<option value="${esc(c.model)}">${esc(c.model)}</option>`)
+  f.model.value = c.model
+  f.provider.value = c.provider
+  f.apiUrl.value = c.apiUrl || ''
+  f.apiModel.value = c.apiModel || ''
+  f.apiKey.value = ''
+  f.apiKey.placeholder = c.apiKeySet ? t('rm.saved') : ''
+  f.command.value = c.command || ''
+  f.language.value = c.language || 'auto'
+  if (!f.language.value) f.language.value = 'auto'
+  f.auto.checked = !!c.auto
+  $('#voiceLocal').innerHTML = c.local.available ? `<span class="ok-text">✓ ${esc(t('voice.localOk', c.local.version || '', c.local.python))}</span> <span class="muted">${esc(t('voice.localModel'))}</span>` : `<span class="err-text">${esc(t('voice.localMissing'))}</span>`
+  $('#voiceTestOut').textContent = ''
+  voiceShow()
+}
+$('#voiceForm').addEventListener('change', (e) => { if (e.target.name === 'engine' || e.target.name === 'provider') voiceShow() })
+$('#voiceForm').addEventListener('submit', run(async (e) => {
+  e.preventDefault()
+  const f = e.target
+  const engine = f.querySelector('input[name=engine]:checked')?.value || 'off'
+  const body = { engine, model: f.model.value, provider: f.provider.value, apiUrl: f.apiUrl.value.trim(), apiModel: f.apiModel.value.trim(), command: f.command.value.trim(), language: f.language.value, auto: f.auto.checked }
+  if (f.apiKey.value.trim()) body.apiKey = f.apiKey.value.trim()
+  await api('PUT', '/v1/admin/voice', body)
+  toast(t('saved'))
+  await loadVoice()
+}))
+$('#voiceTest').addEventListener('click', run(async () => {
+  const b = $('#voiceTest'), out = $('#voiceTestOut')
+  b.disabled = true
+  out.className = 'small muted'
+  out.textContent = t('voice.testing')
+  try {
+    const r = await api('POST', '/v1/admin/voice/test')
+    out.className = 'small'
+    out.innerHTML = r.sample
+      ? `<span class="ok-text">✓ ${esc(t('voice.testOk', r.engine, r.sample.chat, r.sample.seconds ?? '?', (r.sample.ms / 1000).toFixed(1)))}</span><br>“${esc(r.sample.text || t('voice.noWords'))}”`
+      : `<span class="ok-text">✓ ${esc(t('voice.testReady', r.engine))}</span>`
+  } catch (x) {
+    out.className = 'small err-text'
+    out.textContent = x.message
+  } finally { b.disabled = false }
+}))
 async function loadSettings() {
   loadSessions().catch(() => {})
+  loadVoice().catch((e) => { $('#voiceTestOut').textContent = e.message })
+  appCardState()
   const s = await api('GET', '/v1/admin/settings')
   const f = $('#setForm')
   for (const [k, v] of Object.entries(s)) { const el = f.elements[k]; if (!el) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v }
