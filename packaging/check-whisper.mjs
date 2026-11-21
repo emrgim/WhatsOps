@@ -6,7 +6,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)))
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'whatsops-whisper-check-'))
@@ -15,8 +15,8 @@ const model = process.argv[2] || 'tiny'
 const t = Date.now()
 const s = () => `${((Date.now() - t) / 1000).toFixed(0)} s`
 
-const { WhisperInstaller } = await import(path.join(root, 'dist', 'whisper-install.js'))
-const { LocalWorker } = await import(path.join(root, 'dist', 'voice.js'))
+const { WhisperInstaller } = await import(pathToFileURL(path.join(root, 'dist', 'whisper-install.js')).href)
+const { LocalWorker } = await import(pathToFileURL(path.join(root, 'dist', 'voice.js')).href)
 
 const inst = new WhisperInstaller(path.join(tmp, 'data', 'whisper'))
 console.log(`system ${process.platform} ${process.arch}, supported: ${inst.supported}`)
