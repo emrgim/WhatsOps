@@ -372,6 +372,21 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   )
 
   tool(
+    'whatsapp_set_disappearing',
+    'Set disappearing messages',
+    'Set the disappearing-messages duration for a chat (this posts a system notice in that chat) and/or the account default for new chats. 0 = off, 86400 = 24 hours, 604800 = 7 days, 7776000 = 90 days. Confirm with the user first.',
+    'send',
+    {
+      chat: z.string().optional().describe(L('Chat: phone number, JID or exact chat name')),
+      seconds: z.number().int().min(0).describe(L('Duration in seconds: 0 = off, 86400 = 24 hours, 604800 = 7 days, 7776000 = 90 days')),
+      account_default: z.boolean().optional().describe(L('If true, set the account default for new chats (can be combined with chat)')),
+      account,
+    },
+    { readOnlyHint: false, openWorldHint: true },
+    async (a) => app.svc.setDisappearing(acc(a.account), { chat: a.chat, seconds: a.seconds, accountDefault: a.account_default }),
+  )
+
+  tool(
     'whatsapp_react',
     'React to message',
     'React to a message with an emoji (empty emoji removes the reaction).',

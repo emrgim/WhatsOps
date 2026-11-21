@@ -329,6 +329,34 @@ export class WaService {
     return { ok: true, chat, messageId: i.messageId }
   }
 
+  /** Set disappearing-messages duration for a chat and/or the account default for new chats. */
+  async setDisappearing(acc: WaAccount, i: { chat?: string; seconds: number; accountDefault?: boolean }) {
+    const seconds = i.seconds
+    if (!Number.isInteger(seconds) || seconds < 0) {
+      throw new AppError(
+        'INVALID_DURATION',
+        'seconds must be a non-negative integer (0 = off, 86400 = 24 hours, 604800 = 7 days, 7776000 = 90 days)',
+        400,
+      )
+    }
+    if (!i.chat && !i.accountDefault) {
+      throw new AppError('INVALID_INPUT', 'Provide a chat, or set accountDefault to true, or both.', 400)
+    }
+    const out: { ok: true; seconds: number; accountDefault?: boolean; chat?: string; messageId?: string } = { ok: true, seconds }
+    if (i.accountDefault) {
+      const sock = acc.requireOpen()
+      await sock.updateDefaultDisappearingMode(seconds)
+      out.accountDefault = true
+    }
+    if (i.chat) {
+      const jid = await this.resolveChat(acc, i.chat)
+      const msg = await acc.sendRaw(jid, { disappearingMessagesInChat: seconds })
+      out.chat = jid
+      out.messageId = msg.key?.id ?? undefined
+    }
+    return out
+  }
+
   // ------------------------------------------------------------ media
   async downloadMedia(acc: WaAccount, chatInput: string | undefined, messageId: string): Promise<{ buf: Buffer; mimetype: string; fileName: string }> {
     const chat = chatInput ? await this.resolveChat(acc, chatInput) : undefined
