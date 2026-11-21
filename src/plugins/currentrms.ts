@@ -88,6 +88,28 @@ export function pickNew<T extends { id: string; createdAt: number }>(list: T[], 
     .sort((a, b) => a.createdAt - b.createdAt || Number(a.id) - Number(b.id))
     .slice(0, max)
 }
+/**
+ * Crew of an opportunity: the members (staff, freelancers; also vehicles and venues, which have no WhatsApp
+ * number) allocated to its services. An item asset of a service carries the member of its service stock
+ * level (`stock_level_member_id`). Declined or cancelled bookings are not crew.
+ */
+export function crewOf(o: Record<string, unknown>): number[] {
+  const assets: Record<string, unknown>[] = []
+  const take = (v: unknown) => {
+    if (Array.isArray(v)) for (const a of v) if (a && typeof a === 'object') assets.push(a as Record<string, unknown>)
+  }
+  take(o.item_assets)
+  if (Array.isArray(o.opportunity_items)) for (const it of o.opportunity_items) take((it as Record<string, unknown> | null)?.item_assets)
+  const ids = new Set<number>()
+  for (const a of assets) {
+    if (/declin|cancel|reject/i.test(String(a.status_name ?? ''))) continue
+    const m = Number(a.stock_level_member_id ?? (a.stock_level as { member_id?: unknown } | null | undefined)?.member_id)
+    if (m > 0) ids.add(m)
+  }
+  return [...ids]
+}
+const CREW_EVERY_MS = 10 * 60_000 // opportunity groups: look for newly allocated crew this often
+const CREW_PER_ROUND = 20 // groups per look (one Current RMS call each, the API allows 60 a minute)
 const errText = (e: unknown) => (e instanceof AppError ? e.message : String((e as Error)?.message ?? e)).slice(0, 500)
 
 export type CrmsConfig = {
@@ -98,6 +120,7 @@ export type CrmsConfig = {
   whatsappField: string // Member custom field (document_layout_name) holding the WhatsApp number
   inviteFallback: boolean // send the invite link privately to people who can't be added
   ownerAdmin: boolean // the owner of the record in Current RMS (a user with a registered number) is admin of its groups
+  crewFromServices: boolean // opportunity groups also get the crew allocated to the services (added, never removed)
   backupAccount: string // second WhatsOps number: admin of every group and Community, takes over if the main one is offline
   pollMinutes: number // check the synced discussions every N minutes (2, 5, 15, 30); webhooks bring changes at once anyway
   hookSecret: string
@@ -108,10 +131,10 @@ export type CrmsConfig = {
   since: Record<string, number> // 'obj:<Type>' / 'disc:<Type>' → when that level was turned on: only what is created after gets a group by itself
   cursor: Record<string, number> // newest creation time already read ('obj:<Type>', 'disc')
 }
-const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, ownerAdmin: true, backupAccount: '', pollMinutes: 2, hookSecret: '', hooks: [], hooksError: null, hookBase: '', levels: normLevels({}), since: {}, cursor: {} }
-export type ConfigPatch = Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback' | 'ownerAdmin' | 'backupAccount' | 'pollMinutes'>> & { levels?: Record<string, Partial<Levels>> }
+const DEFAULT_CONFIG: CrmsConfig = { subdomain: '', apiKey: '', account: '', mode: 'groups', whatsappField: '', inviteFallback: true, ownerAdmin: true, crewFromServices: false, backupAccount: '', pollMinutes: 2, hookSecret: '', hooks: [], hooksError: null, hookBase: '', levels: normLevels({}), since: {}, cursor: {} }
+export type ConfigPatch = Partial<Pick<CrmsConfig, 'subdomain' | 'apiKey' | 'account' | 'mode' | 'whatsappField' | 'inviteFallback' | 'ownerAdmin' | 'crewFromServices' | 'backupAccount' | 'pollMinutes'>> & { levels?: Record<string, Partial<Levels>> }
 
-type Participant = { memberId: number; name: string; whatsapp: string | null }
+type Participant = { memberId: number; name: string; whatsapp: string | null; crew?: boolean }
 type DiscRow = {
   id: string
   subject: string | null
@@ -233,6 +256,8 @@ export class CurrentRmsPlugin {
   private adminRunning = false
   private draining = false
   private capLogged = 0
+  private crewAt = 0
+  private crewNext = 0
 
   constructor(private app: App) {}
 
@@ -296,6 +321,8 @@ export class CurrentRmsPlugin {
     if (p.whatsappField !== undefined) this.cfg.whatsappField = p.whatsappField
     if (p.inviteFallback !== undefined) this.cfg.inviteFallback = !!p.inviteFallback
     if (p.ownerAdmin !== undefined) this.cfg.ownerAdmin = !!p.ownerAdmin
+    const crewTurnedOn = p.crewFromServices === true && !this.cfg.crewFromServices
+    if (p.crewFromServices !== undefined) this.cfg.crewFromServices = !!p.crewFromServices
     if (p.backupAccount !== undefined) this.cfg.backupAccount = p.backupAccount
     if (p.pollMinutes !== undefined) {
       if (!POLL_CHOICES.includes(p.pollMinutes as 2)) throw new AppError('CRMS_POLL', 'Choose 2, 5, 15 or 30 minutes', 400)
@@ -327,6 +354,8 @@ export class CurrentRmsPlugin {
     if (hooksChanged && this.cfg.hookBase && this.configured()) void this.registerHooks(this.cfg.hookBase).catch((e) => logger.warn({ mod: 'currentrms', err: String(e) }, 'webhooks not updated'))
     // new backup number or owner rule: bring the existing groups in line, one at a time
     if (before !== `${this.cfg.ownerAdmin}|${this.cfg.backupAccount}|${this.cfg.account}`) this.queueAdmins(await this.syncedIds())
+    // crew switched on: the opportunity groups that exist get their crew now
+    if (crewTurnedOn && this.configured()) void this.syncCrew().catch((e) => logger.warn({ mod: 'currentrms', err: errText(e) }, 'crew not added'))
   }
 
   // ------------------------------------------------------------------ Current RMS API
@@ -825,9 +854,12 @@ export class CurrentRmsPlugin {
     const acc = o.group_jid ? this.activeAcc() : this.mainAcc()
     const sock = acc.requireOpen()
     const me = userOf(acc.row.me_jid ?? '')
-    const ids = (JSON.parse(o.participants || '[]') as Participant[]).map((p) => p.memberId)
+    const base = (JSON.parse(o.participants || '[]') as Participant[]).map((p) => p.memberId)
+    // the crew allocated to the services, if chosen in the plugin
+    const crew = o.object_type === 'Opportunity' && this.cfg.crewFromServices ? await this.crewIds(o.object_id) : []
+    const ids = [...new Set([...base, ...crew])]
     const members = await this.membersById(ids)
-    const parts = ids.map((m) => members.get(m) ?? { memberId: m, name: '', whatsapp: null })
+    const parts = ids.map((m) => ({ ...(members.get(m) ?? { memberId: m, name: '', whatsapp: null }), ...(base.includes(m) ? {} : { crew: true }) }))
     if (parts.length) await this.upsertObj(key, { participants: JSON.stringify(parts) })
     const jids = [...new Set(parts.filter((p) => p.whatsapp && p.whatsapp !== me).map((p) => toJid(p.whatsapp!)))]
     const name = (o.name || `#${o.object_id}`).trim()
@@ -854,6 +886,60 @@ export class CurrentRmsPlugin {
     }
     await this.ensureAdminsNow(`obj:${key}`).catch((e) => logger.warn({ mod: 'currentrms', object: key, err: errText(e) }, 'group admins not set'))
     await this.upsertObj(key, { state: 'on', error: null })
+  }
+
+  /** Members allocated to the services of an opportunity (one Current RMS call). */
+  private async crewIds(opportunityId: string): Promise<number[]> {
+    const j = await this.api<{ opportunity?: Record<string, unknown> }>('GET', `/opportunities/${encodeURIComponent(opportunityId)}?include[]=opportunity_items&include[]=item_assets`)
+    return crewOf(j.opportunity ?? {})
+  }
+
+  /**
+   * Crew allocated after the group was made: added to the opportunity groups, a few groups per round
+   * (every CREW_EVERY_MS from the poll, and at once when the option is switched on). Nobody is removed.
+   * Returns how many people were added.
+   */
+  async syncCrew(max = CREW_PER_ROUND): Promise<number> {
+    if (!this.configured() || !this.cfg.crewFromServices) return 0
+    this.crewAt = Date.now()
+    const rows = (await this.app.h.db.selectFrom('crms_objects').selectAll().where('object_type', '=', 'Opportunity').where('sync', '=', 1).where('state', '=', 'on').where('group_jid', 'is not', null).orderBy('key').execute()) as ObjRow[]
+    if (!rows.length) return 0
+    const n = Math.min(max, rows.length)
+    let added = 0
+    for (let i = 0; i < n; i++) {
+      const o = rows[(this.crewNext + i) % rows.length]
+      added += await this.lock(`obj:${o.key}`, () => this.addCrew(o.key)).catch((e) => {
+        logger.warn({ mod: 'currentrms', object: o.key, err: errText(e) }, 'crew not added')
+        return 0
+      })
+    }
+    this.crewNext = (this.crewNext + n) % rows.length
+    return added
+  }
+
+  private async addCrew(key: string): Promise<number> {
+    const o = await this.obj(key)
+    if (!this.cfg.crewFromServices || !o?.sync || !o.group_jid || o.object_type !== 'Opportunity' || !o.object_id) return 0
+    const crew = await this.crewIds(o.object_id)
+    const parts = JSON.parse(o.participants || '[]') as Participant[]
+    // people already in (with a number); those without one are looked at again: the number may come later
+    const fresh = crew.filter((m) => !parts.some((p) => p.memberId === m && p.whatsapp))
+    if (!fresh.length) return 0
+    const members = await this.membersById(fresh)
+    const add = fresh.map((m) => ({ ...(members.get(m) ?? { memberId: m, name: '', whatsapp: null }), crew: true }))
+    const acc = this.activeAcc()
+    const sock = acc.requireOpen()
+    const me = userOf(acc.row.me_jid ?? '')
+    const jids = [...new Set(add.filter((p) => p.whatsapp && p.whatsapp !== me).map((p) => toJid(p.whatsapp!)))]
+    if (jids.length) {
+      const res = await sock.groupParticipantsUpdate(o.group_jid, jids, 'add').catch(() => [] as { status: string; jid?: string }[])
+      await this.sendInvites(acc, o.group_jid, o.name || `#${o.object_id}`, res.filter((x) => x.status === '403' || x.status === '408').map((x) => x.jid).filter(Boolean) as string[])
+    }
+    const byId = new Map(parts.map((p) => [p.memberId, p]))
+    for (const p of add) byId.set(p.memberId, { ...byId.get(p.memberId), ...p, crew: byId.get(p.memberId)?.crew ?? (byId.has(p.memberId) ? undefined : true) })
+    await this.upsertObj(key, { participants: JSON.stringify([...byId.values()]) })
+    if (jids.length) logger.info({ mod: 'currentrms', object: key, added: jids.length }, 'crew of the services added to the opportunity group')
+    return jids.length
   }
 
   /** Records of this type created after their level was turned on: queued for a group. */
@@ -1358,6 +1444,8 @@ export class CurrentRmsPlugin {
     await this.checkNewObjects().catch((e) => logger.warn({ mod: 'currentrms', err: errText(e) }, 'new records not checked'))
     await this.checkNewDiscussions().catch((e) => logger.warn({ mod: 'currentrms', err: errText(e) }, 'new discussions not checked'))
     this.drainQueue()
+    // crew allocated to services since the last look
+    if (this.cfg.crewFromServices && Date.now() - this.crewAt >= CREW_EVERY_MS) void this.syncCrew().catch((e) => logger.warn({ mod: 'currentrms', err: errText(e) }, 'crew not added'))
     // groups that failed before they existed (e.g. WhatsApp was offline): a few per check
     const failed = (await this.app.h.db.selectFrom('crms_discussions').selectAll().where('sync', '=', 1).where('state', '=', 'error').where('group_jid', 'is', null).limit(5).execute()) as DiscRow[]
     for (const r of failed) void this.lock(r.id, () => this.activate(r.id)).catch(() => undefined)
@@ -1529,6 +1617,7 @@ export function registerCurrentRms(fastify: FastifyInstance, app: App, plugin: C
           whatsappField: z.string().max(100).optional(),
           inviteFallback: z.boolean().optional(),
           ownerAdmin: z.boolean().optional(),
+          crewFromServices: z.boolean().optional(),
           backupAccount: z.string().max(64).optional(),
           pollMinutes: z.union([z.literal(2), z.literal(5), z.literal(15), z.literal(30)]).optional(),
           levels: z.record(z.string(), z.object({ objects: z.boolean().optional(), discussions: z.boolean().optional(), messages: z.boolean().optional() })).optional(),

@@ -423,6 +423,8 @@ const CRMS_HTML = (st) => {
       <p class="muted small">${esc(t('crms.lv.cost'))}</p></div>
     <label class="inline"><input type="checkbox" name="ownerAdmin"> <span>${esc(t('crms.ownerAdmin'))}</span></label>
     <p class="muted small">${esc(t('crms.ownerAdminHint'))}</p>
+    <label class="inline"><input type="checkbox" name="crewFromServices"> <span>${esc(t('crms.crew'))}</span></label>
+    <p class="muted small">${esc(t('crms.crewHint'))}</p>
     <label><span>${esc(t('crms.field'))}</span> <select name="whatsappField"></select></label>
     <p class="muted small">${esc(t('crms.fieldHint'))}</p>
     <label class="inline"><input type="checkbox" name="inviteFallback"> <span>${esc(t('crms.invite'))}</span></label>
@@ -471,6 +473,7 @@ async function crmsLoad(st) {
     $$('[data-lv]', f2).forEach((i) => { const l = c.levels?.[i.dataset.lv]; i.checked = l ? !!l[i.dataset.lk] : i.dataset.lk === 'messages' })
     f2.inviteFallback.checked = c.inviteFallback !== false
     f2.ownerAdmin.checked = c.ownerAdmin !== false
+    f2.crewFromServices.checked = !!c.crewFromServices
     f2.whatsappField.innerHTML = `<option value="">${esc(t('crms.fieldNone'))}</option>` + (c.whatsappField ? `<option value="${esc(c.whatsappField)}">${esc(c.whatsappField)}</option>` : '')
     f2.whatsappField.value = c.whatsappField || ''
     crmsHookState(c)
@@ -568,7 +571,7 @@ document.addEventListener('submit', run(async (e) => {
     const f = e.target
     await api('PUT', CRMS + '/config', {
       ...(f.account ? { account: f.account.value, backupAccount: f.backupAccount.value } : {}),
-      mode: f.querySelector('input[name=mode]:checked')?.value ?? 'groups', whatsappField: f.whatsappField.value, inviteFallback: f.inviteFallback.checked, ownerAdmin: f.ownerAdmin.checked,
+      mode: f.querySelector('input[name=mode]:checked')?.value ?? 'groups', whatsappField: f.whatsappField.value, inviteFallback: f.inviteFallback.checked, ownerAdmin: f.ownerAdmin.checked, crewFromServices: f.crewFromServices.checked,
       levels: Object.fromEntries(CRMS_LV.map((ty) => [ty, Object.fromEntries(['objects', 'discussions', 'messages'].map((k) => [k, !!f.querySelector(`[data-lv="${ty}"][data-lk="${k}"]`)?.checked]))])),
     })
     toast(t('saved'))
