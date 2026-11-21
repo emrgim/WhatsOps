@@ -1242,27 +1242,6 @@ $('#licForm').addEventListener('submit', run(async (e) => { e.preventDefault(); 
 $('#licRemove').addEventListener('click', run(async () => renderLicense(await api('DELETE', '/v1/admin/license'))))
 
 // ---------------------------------------------------------------- settings
-// ---------------------------------------------------------------- WhatsOps as an app (PWA / Omarchy web app)
-let installEvt = null
-window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installEvt = e; if ($('#appCard')) appCardState() })
-window.addEventListener('appinstalled', () => { installEvt = null; if ($('#appCard')) appCardState(true) })
-function appCardState(justInstalled) {
-  const standalone = matchMedia('(display-mode: standalone)').matches || matchMedia('(display-mode: window-controls-overlay)').matches
-  $('#appInstall').hidden = !installEvt || standalone
-  $('#appState').textContent = standalone ? t('app.inApp') : justInstalled ? t('app.installed') : installEvt ? '' : t('app.browserMenu')
-  const origin = (state.overview?.publicUrl || location.origin).replace(/\/+$/, '')
-  const cmd = `omarchy-webapp-install "WhatsOps" "${origin}" "${origin}/whatsops.png"`
-  $('#appCmd').textContent = cmd
-  $('#appCmdCopy').dataset.copy = cmd
-}
-$('#appInstall').addEventListener('click', run(async () => {
-  if (!installEvt) return
-  const ev = installEvt
-  ev.prompt()
-  const r = await ev.userChoice
-  installEvt = null
-  appCardState(r.outcome === 'accepted')
-}))
 // ---------------------------------------------------------------- voice messages → text (Settings → General)
 let voiceCfg = null
 function voiceShow() {
@@ -1328,7 +1307,6 @@ $('#voiceTest').addEventListener('click', run(async () => {
 async function loadSettings() {
   loadSessions().catch(() => {})
   loadVoice().catch((e) => { $('#voiceTestOut').textContent = e.message })
-  appCardState()
   const s = await api('GET', '/v1/admin/settings')
   const f = $('#setForm')
   for (const [k, v] of Object.entries(s)) { const el = f.elements[k]; if (!el) continue; if (el.type === 'checkbox') el.checked = !!v; else el.value = v }

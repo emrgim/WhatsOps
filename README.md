@@ -97,7 +97,7 @@ Run it as a service: `deploy/mcp-mrg-whatsops.service` is a systemd user unit (a
 ### Install as an app
 
 The config page is a web app (manifest + icons), so it can live in its own window:
-- **Chrome, Edge, Chromium**: the install icon at the right of the address bar, or *Settings → General → WhatsOps as an app → Install WhatsOps*.
+- **Chrome, Edge, Chromium**: the install icon at the right of the address bar (or menu → *Cast, save and share → Install page as app*).
 - **Omarchy**: menu → *Install → Web App* (name `WhatsOps`, the address of your WhatsOps, icon `<address>/whatsops.png`), or in a terminal:
   ```bash
   omarchy-webapp-install "WhatsOps" "https://whatsops.example.com" "https://whatsops.example.com/whatsops.png"
