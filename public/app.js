@@ -1270,6 +1270,10 @@ function voiceShow() {
   const e = f.querySelector('input[name=engine]:checked')?.value || 'off'
   $$('[data-voice]', f).forEach((d) => { d.hidden = d.dataset.voice === 'on' ? e === 'off' : d.dataset.voice !== e })
   $('#voiceEngineHint').textContent = t('voice.eh.' + e)
+  // Superwhisper exists for macOS, Windows, iOS and Android, not for Linux
+  const ua = navigator.userAgent
+  const linux = /Linux/.test(ua) && !/Android/.test(ua)
+  $('#voiceSwNote').textContent = t(linux ? 'voice.swLinux' : 'voice.swHow')
   const p = voiceCfg?.providers?.[f.provider.value]
   f.apiUrl.placeholder = p?.url || 'https://…/v1'
   f.apiModel.placeholder = p?.model || ''

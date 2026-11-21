@@ -22,7 +22,7 @@ function layout(lang: Lang, title: string, body: string): string {
   return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml"><link rel="icon" href="/favicon.ico?v=2" sizes="any"><link rel="apple-touch-icon" href="/apple-touch-icon.png?v=1">
 <link rel="manifest" href="/manifest.webmanifest"><meta name="theme-color" content="#121212"><meta name="application-name" content="WhatsOps"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="WhatsOps">
-<link id="omTheme" rel="stylesheet" href="/theme.css?v=37"><link rel="stylesheet" href="/static/base.css?v=37"><script src="/static/theme.js?v=37" defer></script>
+<link id="omTheme" rel="stylesheet" href="/theme.css?v=38"><link rel="stylesheet" href="/static/base.css?v=38"><script src="/static/theme.js?v=38" defer></script>
 <style>${BASE_CSS}</style></head><body><div class="wrap"><div class="card">
 <div class="brand"><img src="/favicon.svg?v=2" alt="" width="44" height="44"><div><h1>WhatsOps</h1><div class="muted">MCP · REST API · Baileys</div></div></div>
 ${body}</div></div></body></html>`

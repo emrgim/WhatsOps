@@ -227,3 +227,7 @@ ul.sent{margin:0;padding-left:18px}ul.sent li{margin:4px 0}
   header nav button,header nav a,header>button,header .subbar button,header input,header select{-webkit-app-region:no-drag}
   .subbar{margin-right:calc(-12px - (100vw - env(titlebar-area-width,100vw) - env(titlebar-area-x,0px)))}
 }
+.sw-tip{display:flex;gap:12px;align-items:center;justify-content:space-between;border:1px solid var(--border);padding:10px 12px;margin:8px 0}
+.sw-tip>div{min-width:0}
+a.linkbtn{display:inline-block;flex:0 0 auto;border:1px solid var(--accent);padding:6px 13px;font-weight:700;background:var(--accent);color:var(--accent-fg);text-decoration:none;white-space:nowrap}
+a.linkbtn:hover{background:transparent;color:var(--accent)}
