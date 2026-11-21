@@ -245,3 +245,4 @@ a.linkbtn:hover{background:transparent;color:var(--accent)}
 .picker-list li button:hover,.picker-list li button:focus-visible{background:var(--sel)}
 .picker-list .muted{padding:5px 6px;font-size:12px}
 td.nowrap{white-space:nowrap}
+#bakForm input[name=keep]{max-width:160px}
