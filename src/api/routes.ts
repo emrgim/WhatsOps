@@ -91,6 +91,9 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
         start_url: '/',
         scope: '/',
         display: 'standalone',
+        // let the app header double as the window title bar on desktop installs,
+        // so the browser's own app toolbar is not drawn as a second bar
+        display_override: ['window-controls-overlay'],
         background_color: color('background', '#121212'),
         theme_color: color('bar', color('background', '#121212')),
         categories: ['business', 'productivity', 'utilities'],

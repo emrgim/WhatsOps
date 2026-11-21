@@ -217,3 +217,13 @@ ul.sent{margin:0;padding-left:18px}ul.sent li{margin:4px 0}
 .ok-text{color:var(--ok)}
 #voiceForm .seg{margin-top:4px}
 .row.rm-hookurl>button{flex:0 0 auto;width:auto;min-width:96px}
+
+/* desktop web app: the header doubles as the window title bar, so the browser's
+   own app toolbar collapses into the window controls overlay (one bar, not two) */
+@media (display-mode:window-controls-overlay){
+  header{-webkit-app-region:drag;
+    padding-left:calc(12px + env(titlebar-area-x,0px));
+    padding-right:calc(12px + (100vw - env(titlebar-area-width,100vw) - env(titlebar-area-x,0px)))}
+  header nav button,header nav a,header>button,header .subbar button,header input,header select{-webkit-app-region:no-drag}
+  .subbar{margin-right:calc(-12px - (100vw - env(titlebar-area-width,100vw) - env(titlebar-area-x,0px)))}
+}
