@@ -16,7 +16,7 @@ export type AppSettings = {
   oauthAccessTtl: number
   /** OAuth refresh-token lifetime (days) */
   oauthRefreshDays: number
-  /** public base URL (overrides X-Forwarded-Host detection), e.g. https://whatsops.mrg.im */
+  /** public base URL (overrides X-Forwarded-Host detection), e.g. https://whatsops.example.com */
   publicUrl: string
   /** max media size for send/download (MB) */
   maxMediaMb: number

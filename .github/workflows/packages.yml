@@ -40,6 +40,8 @@ jobs:
           node-version: '24'
       - run: npm ci --no-audit --no-fund
       - run: npm run build
+      - name: Self-hosted check (no address of a real installation)
+        run: node packaging/check-self-hosted.mjs
       - run: npm prune --omit=dev --no-audit --no-fund
       - name: rpmbuild (Linux)
         if: matrix.platform == 'linux'
