@@ -477,6 +477,19 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     async (req) => app.svc.deleteMessage(accountFor(app, P(req), req.body.account), req.body),
   )
 
+  f.post(
+    '/v1/chats/disappearing',
+    {
+      preHandler: guard('send'),
+      schema: {
+        ...tags('Send'),
+        summary: 'Set disappearing messages for a chat and/or the account default',
+        body: z.object({ chat: z.string().optional(), seconds: z.number().int().min(0), accountDefault: z.boolean().optional(), account: acct }),
+      },
+    },
+    async (req) => app.svc.setDisappearing(accountFor(app, P(req), req.body.account), req.body),
+  )
+
   f.get(
     '/v1/messages/:id/media',
     { preHandler: guard('read'), schema: { ...tags('Messages'), summary: 'Download media of a message (binary)', params: z.object({ id: z.string() }), querystring: z.object({ chat: z.string().optional(), account: acct }) } },

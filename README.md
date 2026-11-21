@@ -118,6 +118,10 @@ The full API vocabulary is in **Connectors → API** and at `/docs`.
 Events: `message.received`, `message.sent`, `message.update`, `connection.update`, `history.sync`, `chat.update`, `profile.update` (or `*`). Each delivery is a JSON `POST` signed with
 `X-WA-Signature: sha256=HMAC(secret, X-WA-Timestamp + "." + body)` and retried up to 5 times (1 min → 12 h). Live events are also available as SSE at `/v1/events`.
 
+Body: `{ id, type, account, at, context, data }` — `context` is one line in plain words (e.g. `WhatsApp message received on +971… from Mario +39…: ciao`), which agents such as Cursor / Grok Bot automations read together with their prompt.
+
+**Receivers with their own key** (Cursor and Grok Bot automations, Zapier, Make, n8n…): in *Key or header* paste the key (`crsr_…`, sent as `Authorization: Bearer crsr_…`) or the whole header line the receiver shows (`Authorization: Bearer …`, `X-Api-Key: …`; several lines for several headers). Keys are never shown again in full; *Key* in the list changes or removes them. API: `headers` in `POST /v1/admin/webhooks` and `PATCH /v1/admin/webhooks/{id}` (a string as above or an object; `""` removes them). *Test* sends a `webhook.test` event to that webhook only and shows the receiver's answer.
+
 ## CLI
 
 ```
