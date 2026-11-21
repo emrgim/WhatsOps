@@ -99,7 +99,8 @@ async function main() {
   const license = new License(h, () => reports.code)
   await license.start()
 
-  const fastify = Fastify({ loggerInstance: logger, logController: new LogController({ disableRequestLogging: true }), trustProxy: true, bodyLimit: 100 * 1024 * 1024 }) as unknown as FastifyInstance
+  // media links (/media/:token) carry a signed token longer than the default 100-char path param limit
+  const fastify = Fastify({ loggerInstance: logger, logController: new LogController({ disableRequestLogging: true }), trustProxy: true, bodyLimit: 100 * 1024 * 1024, routerOptions: { maxParamLength: 2048 } }) as unknown as FastifyInstance
   fastify.setValidatorCompiler(validatorCompiler)
   fastify.setSerializerCompiler(serializerCompiler)
   await fastify.register(cookie)
