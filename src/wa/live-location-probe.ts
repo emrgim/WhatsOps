@@ -89,6 +89,13 @@ export async function trySubscribe(query: Query, chat: string, account: string):
 }
 
 const running = new Map<string, ReturnType<typeof setInterval>>()
+/** User parts (digits) of the sharers we subscribed to: every frame that mentions them is logged (shape only). */
+const watched = new Set<string>()
+const userPart = (jid: string) => jid.split('@')[0].split(':')[0]
+export function mentionsWatched(n: BinaryNode): boolean {
+  if (!watched.size) return false
+  return Object.values(n.attrs ?? {}).some((v) => typeof v === 'string' && watched.has(userPart(v)))
+}
 
 /** Subscribe to one chat (each candidate JID until one is accepted), then renew every 25 s for WA_LIVE_LOCATION_PROBE_MINUTES. */
 export async function probeSubscribe(sock: Pick<WASocket, 'query' | 'ws'>, chats: string[], account: string): Promise<void> {
@@ -103,20 +110,24 @@ export async function probeSubscribe(sock: Pick<WASocket, 'query' | 'ws'>, chats
       break
     }
   }
-  if (idx < 0) return void writeProbe({ account, dir: 'note', note: 'no subscribe shape accepted', chats })
-  writeProbe({ account, dir: 'note', note: 'subscribed', chat, variant: idx })
+  for (const c of chats) watched.add(userPart(c))
+  const targets = idx >= 0 ? [chat] : chats // no answer at all: keep sending shape 0 to every candidate, like #1026 (no wait)
+  if (idx < 0) idx = 0
+  writeProbe({ account, dir: 'note', note: 'subscribed', targets, variant: idx })
   const end = Date.now() + MINUTES * 60_000
   const t = setInterval(() => {
     const open = (sock.ws as { isOpen?: boolean }).isOpen !== false
     if (!open || Date.now() > end) {
       clearInterval(t)
       running.delete(k)
-      return void writeProbe({ account, dir: 'note', note: 'probe subscription ended', chat })
+      return void writeProbe({ account, dir: 'note', note: 'probe subscription ended', targets })
     }
-    sock
-      .query(structuredClone(subscribeNodes(chat)[idx]), 15_000)
-      .then((res) => writeProbe({ account, dir: 'in', variant: idx, renew: true, result: describeNode(res) }))
-      .catch((e) => writeProbe({ account, dir: 'in', variant: idx, renew: true, error: String((e as Error)?.message ?? e) }))
+    for (const c of targets) {
+      sock
+        .query(structuredClone(subscribeNodes(c)[idx]), 20_000)
+        .then((res) => writeProbe({ account, dir: 'in', variant: idx, target: c, renew: true, result: describeNode(res) }))
+        .catch((e) => writeProbe({ account, dir: 'in', variant: idx, target: c, renew: true, error: String((e as Error)?.message ?? e) }))
+    }
   }, EVERY_MS)
   t.unref()
   running.set(k, t)
@@ -195,8 +206,10 @@ export async function tryDecryptUpdate(repo: Pick<Repo, 'decryptGroupMessage'>, 
 export function attachProbe(sock: Pick<WASocket, 'ws' | 'signalRepository'>, account: string): void {
   sock.ws.on('frame', (n: BinaryNode) => {
     try {
-      if (!isLocationFrame(n)) return
-      writeProbe({ account, dir: 'in', frame: describeNode(n) })
+      const loc = isLocationFrame(n)
+      if (!loc && !mentionsWatched(n)) return
+      writeProbe({ account, dir: 'in', ...(loc ? {} : { watched: true }), frame: describeNode(n) })
+      if (!loc) return
       void tryDecryptUpdate(sock.signalRepository, n, account).catch(() => undefined)
     } catch {
       /* never break the socket */
