@@ -493,6 +493,29 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   )
 
   f.post(
+    '/v1/status',
+    {
+      preHandler: guard('send'),
+      schema: {
+        ...tags('Send'),
+        summary: 'Post a status (story) only the listed people can see',
+        body: z.object({
+          audience: z.array(z.string()).min(1),
+          type: z.enum(['text', 'image', 'video']),
+          text: z.string().optional(),
+          url: z.string().optional(),
+          base64: z.string().optional(),
+          mimetype: z.string().optional(),
+          caption: z.string().optional(),
+          account: acct,
+        }),
+      },
+      bodyLimit: 100 * 1024 * 1024,
+    },
+    async (req) => app.svc.postStatus(accountFor(app, P(req), req.body.account), req.body),
+  )
+
+  f.post(
     '/v1/messages/location',
     { preHandler: guard('send'), schema: { ...tags('Send'), summary: 'Send a location', body: z.object({ to: z.string(), latitude: z.number(), longitude: z.number(), name: z.string().optional(), address: z.string().optional(), account: acct }) } },
     async (req) => app.svc.sendLocation(accountFor(app, P(req), req.body.account), req.body),

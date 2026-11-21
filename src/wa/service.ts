@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { downloadMediaMessage, getContentType, normalizeMessageContent, type AnyMessageContent, type WAMessageKey } from '@whiskeysockets/baileys'
+import { downloadMediaMessage, getContentType, jidNormalizedUser, normalizeMessageContent, type AnyMessageContent, type WAMessageKey } from '@whiskeysockets/baileys'
 import { sql } from 'kysely'
 import { now, upsert, type DbHandle } from '../db/index.js'
 import { logger } from '../log.js'
@@ -255,23 +255,7 @@ export class WaService {
     i: { to: string; type: MediaType; url?: string; base64?: string; mimetype?: string; fileName?: string; caption?: string; ptt?: boolean; replyTo?: string; idempotencyKey?: string },
   ) {
     const jid = await this.prepareRecipient(acc, i.to)
-    let buf: Buffer
-    let mimetype = i.mimetype
-    let fileName = i.fileName
-    if (i.base64) {
-      const b64 = i.base64.replace(/^data:([^;]+);base64,/, (_m, mt) => {
-        mimetype = mimetype ?? mt
-        return ''
-      })
-      buf = Buffer.from(b64, 'base64')
-      if (buf.length > this.settings.get().maxMediaMb * 1024 * 1024) throw new AppError('MEDIA_TOO_LARGE', 'media too large', 413)
-    } else if (i.url) {
-      const f = await this.fetchMedia(i.url)
-      buf = f.buf
-      mimetype = mimetype ?? f.mimetype
-      fileName = fileName ?? f.fileName
-    } else throw new AppError('NO_MEDIA', 'Provide url or base64', 400)
-    if (!buf.length) throw new AppError('NO_MEDIA', 'media is empty', 400)
+    const { buf, mimetype, fileName } = await this.loadMedia(i)
     let content: AnyMessageContent
     switch (i.type) {
       case 'image':
@@ -295,6 +279,57 @@ export class WaService {
       const msg = await acc.sendRaw(jid, content, quoted ? { quoted } : undefined)
       return { id: msg.key.id!, chat: jid, timestamp: new Date().toISOString(), status: 'sent', bytes: buf.length }
     })
+  }
+
+  /** The file of a media message: from base64 (or a data: URL) or downloaded from a URL, within the size limit. */
+  private async loadMedia(i: { url?: string; base64?: string; mimetype?: string; fileName?: string }): Promise<{ buf: Buffer; mimetype?: string; fileName?: string }> {
+    let buf: Buffer
+    let mimetype = i.mimetype
+    let fileName = i.fileName
+    if (i.base64) {
+      const b64 = i.base64.replace(/^data:([^;]+);base64,/, (_m, mt) => {
+        mimetype = mimetype ?? mt
+        return ''
+      })
+      buf = Buffer.from(b64, 'base64')
+      if (buf.length > this.settings.get().maxMediaMb * 1024 * 1024) throw new AppError('MEDIA_TOO_LARGE', 'media too large', 413)
+    } else if (i.url) {
+      const f = await this.fetchMedia(i.url)
+      buf = f.buf
+      mimetype = mimetype ?? f.mimetype
+      fileName = fileName ?? f.fileName
+    } else throw new AppError('NO_MEDIA', 'Provide url or base64', 400)
+    if (!buf.length) throw new AppError('NO_MEDIA', 'media is empty', 400)
+    return { buf, mimetype, fileName }
+  }
+
+  /**
+   * Post a status (story) that only the listed people can see: WhatsApp delivers it to them and to my own
+   * devices, nobody else. Text, image or video; it disappears after 24 hours like any status.
+   */
+  async postStatus(
+    acc: WaAccount,
+    i: { audience: string[]; type: 'text' | 'image' | 'video'; text?: string; url?: string; base64?: string; mimetype?: string; caption?: string },
+  ) {
+    if (!i.audience?.length) throw new AppError('STATUS_AUDIENCE_REQUIRED', 'Say who may see the status: at least one phone number or contact', 400)
+    const audience: string[] = []
+    for (const who of i.audience) {
+      const jid = await this.prepareRecipient(acc, who)
+      if (isGroupJid(jid)) throw new AppError('STATUS_AUDIENCE_GROUP', 'A status is seen by people, not groups: {0}', 400, [who])
+      if (!audience.includes(jid)) audience.push(jid)
+    }
+    let content: AnyMessageContent
+    if (i.type === 'text') {
+      if (!i.text?.trim()) throw new AppError('EMPTY_TEXT', 'text is required', 400)
+      content = { text: i.text }
+    } else {
+      const { buf, mimetype } = await this.loadMedia(i)
+      content = i.type === 'video' ? { video: buf, caption: i.caption, ...(mimetype ? { mimetype } : {}) } : { image: buf, caption: i.caption, ...(mimetype ? { mimetype } : {}) }
+    }
+    const me = acc.requireOpen().user?.id
+    const statusJidList = [...audience, ...(me ? [jidNormalizedUser(me)] : [])]
+    const msg = await acc.sendRaw('status@broadcast', content, { broadcast: true, statusJidList })
+    return { id: msg.key.id!, audience, type: i.type, timestamp: new Date().toISOString(), status: 'sent' }
   }
 
   async sendLocation(acc: WaAccount, i: { to: string; latitude: number; longitude: number; name?: string; address?: string }) {

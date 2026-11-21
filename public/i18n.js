@@ -259,6 +259,7 @@ window.WA_API_IT = {
  "Send a test event": "Invia un evento di prova",
  "Send a text message": "Invia un messaggio di testo",
  "Send media (url or base64)": "Invia un media (URL o base64)",
+ "Post a status (story) only the listed people can see": "Pubblica uno stato (storia) che vedono solo le persone indicate",
  "Server overview": "Panoramica del server",
  "Server-Sent Events stream": "Flusso Server-Sent Events",
  "Set admin password": "Imposta la password admin",

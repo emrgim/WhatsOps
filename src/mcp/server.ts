@@ -355,6 +355,25 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   )
 
   tool(
+    'whatsapp_post_status',
+    'Post status',
+    'Post a WhatsApp status (story: text, image or video, gone after 24 hours) that ONLY the people in audience can see, whatever the status privacy set on the phone. Image/video from a public URL or base64.',
+    'send',
+    {
+      audience: z.array(z.string()).min(1).describe(L('Who may see it: phone numbers, JIDs or exact contact names')),
+      type: z.enum(['text', 'image', 'video']).describe(L('Status type')),
+      text: z.string().optional().describe(L('Text of a text status')),
+      url: z.string().optional().describe(L('http(s) URL of the file')),
+      base64: z.string().optional().describe(L('File content as base64 (or data: URL)')),
+      mimetype: z.string().optional().describe(L('MIME type, e.g. image/jpeg')),
+      caption: z.string().optional().describe(L('Caption')),
+      account,
+    },
+    { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    async (a) => app.svc.postStatus(acc(a.account), { audience: a.audience, type: a.type, text: a.text, url: a.url, base64: a.base64, mimetype: a.mimetype, caption: a.caption }),
+  )
+
+  tool(
     'whatsapp_send_location',
     'Send location',
     'Send a location pin.',
