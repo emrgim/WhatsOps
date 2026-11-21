@@ -95,7 +95,7 @@ describe('voice service with a fake account', () => {
   afterAll(() => server.close())
 
   it('off: says where to switch it on', async () => {
-    await expect(voice.transcribe(fakeAcc as never, undefined, 'V1')).rejects.toThrow(/Settings → General → Voice messages/)
+    await expect(voice.transcribe(fakeAcc as never, undefined, 'V1')).rejects.toThrow(/Settings → Voice/)
   })
 
   it('command engine: transcribes once, then serves the stored text; event for webhooks', async () => {
@@ -129,8 +129,8 @@ describe('voice service with a fake account', () => {
 
   it('online service: xAI /stt and OpenAI-compatible /audio/transcriptions, with the key', async () => {
     await voice.update({ engine: 'api', provider: 'xai', apiUrl: base, apiKey: 'k1', language: 'auto' })
-    expect(voice.publicConfig()).toMatchObject({ apiKeySet: true, apiModelEffective: 'grok-voice-transcribe-2.0' })
-    expect(JSON.stringify(voice.publicConfig())).not.toContain('k1')
+    expect(await voice.publicConfig()).toMatchObject({ apiKeySet: true, apiModelEffective: 'grok-voice-transcribe-2.0', platform: process.platform })
+    expect(JSON.stringify(await voice.publicConfig())).not.toContain('k1')
     const r = await voice.transcribeAudio(Buffer.from('OggS'), 'audio/ogg', 7)
     expect(r).toEqual({ text: 'Hello from the API', language: 'en', duration: 7.2 })
     expect(apiCalls.at(-1)).toMatchObject({ path: '/v1/stt', auth: 'Bearer k1' })

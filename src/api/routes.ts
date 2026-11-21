@@ -720,9 +720,9 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       preHandler: guard('admin'),
       schema: {
         ...tags('Admin'),
-        summary: 'Voice messages: choose the transcription engine (off, local faster-whisper, command, online service)',
+        summary: 'Voice messages: choose the transcription engine (off, faster-whisper on the server, Superwhisper on macOS / Windows, command, online service)',
         body: z.object({
-          engine: z.enum(['off', 'local', 'command', 'api']).optional(),
+          engine: z.enum(['off', 'local', 'superwhisper', 'command', 'api']).optional(),
           model: z.string().max(80).optional(),
           command: z.string().max(1000).optional(),
           provider: z.enum(['xai', 'openai', 'groq', 'custom']).optional(),
@@ -731,12 +731,26 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
           apiModel: z.string().max(120).optional(),
           language: z.string().max(8).optional(),
           auto: z.boolean().optional(),
+          swFolder: z.string().max(500).optional(),
+          swText: z.enum(['raw', 'processed']).optional(),
         }),
       },
     },
     async (req) => {
       await app.voice.update(req.body)
       return app.voice.publicConfig()
+    },
+  )
+  f.get('/v1/admin/voice/check', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Voice messages: check again what is installed on the server (Superwhisper, faster-whisper)' } }, async () => app.voice.publicConfig(true))
+  f.post(
+    '/v1/admin/voice/superwhisper/open',
+    {
+      preHandler: guard('admin'),
+      schema: { ...tags('Admin'), summary: 'Superwhisper (macOS / Windows server): start the app, or open its settings', body: z.object({ what: z.enum(['app', 'settings']).default('app') }) },
+    },
+    async (req) => {
+      await app.voice.sw.open(req.body.what)
+      return app.voice.publicConfig(true)
     },
   )
   f.post('/v1/admin/voice/test', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'Voice messages: try the engine on the latest voice message' } }, async () => app.voice.test())

@@ -32,6 +32,7 @@
     "link-preview-js": "^3.2.0",
     "mysql2": "^3.24.6",
     "node-cache": "^5.1.2",
+    "ogg-opus-decoder": "^1.7.5",
     "pg": "^8.23.1",
     "pino": "^10.4.0",
     "qrcode": "^1.5.4",

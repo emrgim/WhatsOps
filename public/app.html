@@ -13,11 +13,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="WhatsOps">
-<link id="omTheme" rel="stylesheet" href="/theme.css?v=39">
-<link rel="stylesheet" href="/static/base.css?v=39">
-<link rel="stylesheet" href="/static/app.css?v=39">
-<script src="/static/theme.js?v=39" defer></script>
-<script src="/static/i18n.js?v=39"></script>
+<link id="omTheme" rel="stylesheet" href="/theme.css?v=40">
+<link rel="stylesheet" href="/static/base.css?v=40">
+<link rel="stylesheet" href="/static/app.css?v=40">
+<script src="/static/theme.js?v=40" defer></script>
+<script src="/static/i18n.js?v=40"></script>
 </head>
 <body>
 <header>
@@ -28,7 +28,7 @@
     <button data-tab="settings" data-i18n="nav.settings"></button>
   </nav>
   <button id="logout" class="ghost small" data-i18n="logout"></button>
-  <div class="subbar"><div class="subnav" data-for="connect" hidden><button data-sub="plugins" class="on" data-i18n="sub.plugins"></button><button data-sub="mcp">MCP</button><button data-sub="api">API</button><button data-sub="hooks" data-i18n="nav.hooks"></button></div><div class="subnav" data-for="settings" hidden><button data-sub="general" class="on" data-i18n="sub.general"></button><button data-sub="users" data-i18n="sub.users"></button><button data-sub="updates" data-i18n="sub.updates"></button><button data-sub="db" data-i18n="nav.db"></button><button data-sub="log" data-i18n="nav.log"></button><button data-sub="feedback" data-i18n="nav.feedback"></button><button data-sub="license" data-i18n="nav.license" hidden></button></div></div>
+  <div class="subbar"><div class="subnav" data-for="connect" hidden><button data-sub="plugins" class="on" data-i18n="sub.plugins"></button><button data-sub="mcp">MCP</button><button data-sub="api">API</button><button data-sub="hooks" data-i18n="nav.hooks"></button></div><div class="subnav" data-for="settings" hidden><button data-sub="general" class="on" data-i18n="sub.general"></button><button data-sub="users" data-i18n="sub.users"></button><button data-sub="updates" data-i18n="sub.updates"></button><button data-sub="db" data-i18n="nav.db"></button><button data-sub="log" data-i18n="nav.log"></button><button data-sub="voice" data-i18n="sub.voice"></button><button data-sub="feedback" data-i18n="nav.feedback"></button><button data-sub="license" data-i18n="nav.license" hidden></button></div></div>
 </header>
 <main>
   <section id="numbers" class="tab on">
@@ -91,36 +91,6 @@
       </div>
       <p class="muted small" id="appearInfo"></p>
     </div>
-    <form id="voiceForm" class="card form">
-      <h3 data-i18n="voice.title"></h3>
-      <p class="muted small" data-i18n="voice.hint"></p>
-      <div class="seg" role="radiogroup">
-        <label><input type="radio" name="engine" value="off"><span data-i18n="voice.e.off"></span></label>
-        <label><input type="radio" name="engine" value="local"><span data-i18n="voice.e.local"></span></label>
-        <label><input type="radio" name="engine" value="api"><span data-i18n="voice.e.api"></span></label>
-        <label><input type="radio" name="engine" value="command"><span data-i18n="voice.e.command"></span></label>
-      </div>
-      <p class="muted small" id="voiceEngineHint"></p>
-      <div class="sw-tip">
-        <div><b>Superwhisper</b> <span class="muted small" data-i18n="voice.swTip"></span><br><span class="muted small" id="voiceSwNote"></span></div>
-        <a class="linkbtn" href="https://superwhisper.com/download" target="_blank" rel="noopener" data-i18n="voice.swDownload"></a>
-      </div>
-      <div data-voice="local"><label><span data-i18n="voice.model"></span> <select name="model"></select></label><p class="small" id="voiceLocal"></p></div>
-      <div data-voice="api">
-        <div class="row"><label><span data-i18n="voice.provider"></span> <select name="provider"><option value="xai">xAI</option><option value="openai">OpenAI</option><option value="groq">Groq</option><option value="custom" data-i18n="voice.custom"></option></select></label><label><span data-i18n="voice.apiModel"></span> <input name="apiModel" spellcheck="false"></label></div>
-        <label><span data-i18n="voice.apiUrl"></span> <input name="apiUrl" spellcheck="false"></label>
-        <label><span data-i18n="voice.apiKey"></span> <input name="apiKey" type="password" autocomplete="new-password" spellcheck="false"></label>
-        <p class="muted small" data-i18n="voice.apiHint"></p>
-      </div>
-      <div data-voice="command"><label><span data-i18n="voice.command"></span> <input name="command" spellcheck="false" placeholder="whisper-cli -m /path/model.bin -nt -f {file}"></label><p class="muted small" data-i18n="voice.commandHint"></p></div>
-      <div data-voice="on">
-        <label><span data-i18n="voice.lang"></span> <select name="language"><option value="auto" data-i18n="voice.langAuto"></option><option value="it">Italiano</option><option value="en">English</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt">Português</option><option value="nl">Nederlands</option><option value="ar">العربية</option></select></label>
-        <label class="inline"><input type="checkbox" name="auto"> <span data-i18n="voice.auto"></span></label>
-        <p class="muted small" data-i18n="voice.autoHint"></p>
-      </div>
-      <div class="row"><button type="submit" data-i18n="save"></button><button type="button" class="ghost" id="voiceTest" data-i18n="voice.test"></button></div>
-      <p class="small" id="voiceTestOut"></p>
-    </form>
     <form id="setForm" class="card form">
       <div class="row"><label><span data-i18n="set.rate"></span> <input name="ratePerMin" type="number" min="1"></label><label><span data-i18n="set.gap"></span> <input name="perChatGapMs" type="number" min="0"></label></div>
       <label><span data-i18n="set.allow"></span> <input name="sendAllowlist" data-i18n-ph="set.allowPh"></label>
@@ -179,6 +149,61 @@
         <div class="row"><button type="button" id="updCheck" class="ghost" data-i18n="upd.check"></button><button type="button" id="updApply" data-i18n="upd.apply" hidden></button></div>
         <div id="updNotes" hidden><h3 data-i18n="upd.notes"></h3><pre id="updNotesText"></pre></div>
       </div>
+    </div>
+    <div class="sub" id="settings-voice">
+    <form id="voiceForm" class="card form">
+      <h3 data-i18n="voice.title"></h3>
+      <p class="muted small" data-i18n="voice.hint"></p>
+      <div class="seg" role="radiogroup" id="voiceEngines">
+        <label><input type="radio" name="engine" value="off"><span data-i18n="voice.e.off"></span></label>
+        <label><input type="radio" name="engine" value="local"><span data-i18n="voice.e.local"></span></label>
+        <label><input type="radio" name="engine" value="superwhisper"><span>Superwhisper</span></label>
+        <label><input type="radio" name="engine" value="api"><span data-i18n="voice.e.api"></span></label>
+        <label><input type="radio" name="engine" value="command"><span data-i18n="voice.e.command"></span></label>
+      </div>
+      <p class="small" id="voiceRight"></p>
+      <p class="muted small" id="voiceEngineHint"></p>
+      <div data-voice="local"><label><span data-i18n="voice.model"></span> <select name="model"></select></label><p class="small" id="voiceLocal"></p></div>
+      <div data-voice="superwhisper" id="voiceSw">
+        <ol class="sw-steps" id="voiceSwSteps"></ol>
+        <div class="row sw-actions">
+          <a class="linkbtn" id="voiceSwDownload" href="https://superwhisper.com/download" target="_blank" rel="noopener" data-i18n="voice.swDownload"></a>
+          <button type="button" class="ghost" id="voiceSwOpen" data-i18n="voice.swOpen"></button>
+          <button type="button" class="ghost" id="voiceSwSettings" data-i18n="voice.swSettings"></button>
+          <button type="button" class="ghost" id="voiceSwCheck" data-i18n="voice.swCheck"></button>
+        </div>
+        <label><span data-i18n="voice.swFolder"></span> <input name="swFolder" spellcheck="false"></label>
+        <p class="muted small" data-i18n="voice.swFolderHint"></p>
+        <span class="lbl" data-i18n="voice.swText"></span>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="swText" value="raw"><span data-i18n="voice.swRaw"></span></label>
+          <label><input type="radio" name="swText" value="processed"><span data-i18n="voice.swProcessed"></span></label>
+        </div>
+        <p class="muted small" data-i18n="voice.swTextHint"></p>
+      </div>
+      <div class="sw-tip" id="voiceSwTip" hidden>
+        <div><b>Superwhisper</b> <span class="muted small" id="voiceSwNote"></span></div>
+        <a class="linkbtn" href="https://superwhisper.com/download" target="_blank" rel="noopener" data-i18n="voice.swDownload"></a>
+      </div>
+      <div data-voice="api">
+        <div class="row"><label><span data-i18n="voice.provider"></span> <select name="provider"><option value="xai">xAI</option><option value="openai">OpenAI</option><option value="groq">Groq</option><option value="custom" data-i18n="voice.custom"></option></select></label><label><span data-i18n="voice.apiModel"></span> <input name="apiModel" spellcheck="false"></label></div>
+        <label><span data-i18n="voice.apiUrl"></span> <input name="apiUrl" spellcheck="false"></label>
+        <label><span data-i18n="voice.apiKey"></span> <input name="apiKey" type="password" autocomplete="new-password" spellcheck="false"></label>
+        <p class="muted small" data-i18n="voice.apiHint"></p>
+      </div>
+      <div data-voice="command"><label><span data-i18n="voice.command"></span> <input name="command" spellcheck="false" placeholder="whisper-cli -m /path/model.bin -nt -f {file}"></label><p class="muted small" data-i18n="voice.commandHint"></p></div>
+      <div data-voice="on">
+        <label><span data-i18n="voice.lang"></span> <select name="language"><option value="auto" data-i18n="voice.langAuto"></option><option value="it">Italiano</option><option value="en">English</option><option value="es">Español</option><option value="fr">Français</option><option value="de">Deutsch</option><option value="pt">Português</option><option value="nl">Nederlands</option><option value="ar">العربية</option></select></label>
+        <span class="lbl" data-i18n="voice.which"></span>
+        <div class="seg" role="radiogroup">
+          <label><input type="radio" name="autoMode" value="all"><span data-i18n="voice.whichAll"></span></label>
+          <label><input type="radio" name="autoMode" value="asked"><span data-i18n="voice.whichAsked"></span></label>
+        </div>
+        <p class="muted small" id="voiceWhichHint"></p>
+      </div>
+      <div class="row"><button type="submit" data-i18n="save"></button><button type="button" class="ghost" id="voiceTest" data-i18n="voice.test"></button></div>
+      <p class="small" id="voiceTestOut"></p>
+    </form>
     </div>
     <div class="sub" id="settings-feedback">
       <form id="fbForm" class="card form">
@@ -291,6 +316,6 @@
 </dialog>
 
 <div id="toast"></div>
-<script src="/static/app.js?v=39"></script>
+<script src="/static/app.js?v=40"></script>
 </body>
 </html>
