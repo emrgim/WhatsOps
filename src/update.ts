@@ -16,7 +16,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { VERSION } from './config.js'
+import { BUILD, VERSION, VERSION_LABEL } from './config.js'
 import { getSetting, setSetting, type DbHandle } from './db/index.js'
 import { logger } from './log.js'
 import type { Settings } from './settings.js'
@@ -95,6 +95,8 @@ export class Updater {
     return {
       repo: UPDATE_REPO,
       current: VERSION,
+      build: BUILD,
+      currentLabel: VERSION_LABEL,
       latest: this.latest,
       available: this.available(),
       auto: this.settings.get().autoUpdate,

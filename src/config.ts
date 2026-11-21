@@ -1,8 +1,21 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-export const VERSION = '1.7.0'
+/** Beta until 1.0: 0.0.x, one number per release. */
+export const VERSION = '0.0.1'
+/** Git commit the program was built from (dist/build.json, written by `npm run build`); `dev` when run from source. */
+export const BUILD: string = (() => {
+  try {
+    const b = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'build.json'), 'utf8')) as { build?: string }
+    return String(b.build || 'dev')
+  } catch {
+    return 'dev'
+  }
+})()
+/** What people see: `0.0.1 beta (build ae3a1dc)`. */
+export const VERSION_LABEL = `${VERSION}${Number(VERSION.split('.')[0]) < 1 ? ' beta' : ''} (build ${BUILD})`
 
 function env(name: string, def = ''): string {
   const v = process.env[name]

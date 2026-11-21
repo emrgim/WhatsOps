@@ -61,7 +61,7 @@ window.WA_I18N = {
     'pw.title': 'Admin password', 'pw.set': 'Password enabled.', 'pw.unset': 'No password: sign in with a WhatsApp code or a login link.', 'pw.new': 'New password',
     'pw.save': 'Set password', 'pw.clear': 'Disable password', 'pw.done': 'Password set', 'confirm.pwClear': 'Disable the password?',
     'link.title': 'Login link', 'link.hint': 'One-time link (30 min) to sign in from another device.', 'link.make': 'Create link',
-    'svc.title': 'Service', 'svc.info': 'v{0} · up for {1} min · database {2} · server language {3}', 'svc.restart': 'Restart service', 'confirm.restart': 'Restart the service?', 'svc.restarting': 'Restarting…',
+    'svc.title': 'Service', 'svc.info': '{0} · up for {1} min · database {2} · server language {3}', 'svc.restart': 'Restart service', 'confirm.restart': 'Restart the service?', 'svc.restarting': 'Restarting…',
   },
   it: {
     title: 'WhatsOps · Configurazione',
@@ -122,7 +122,7 @@ window.WA_I18N = {
     'pw.title': 'Password amministratore', 'pw.set': 'Password attiva.', 'pw.unset': 'Nessuna password: accesso con codice WhatsApp o link.', 'pw.new': 'Nuova password',
     'pw.save': 'Imposta password', 'pw.clear': 'Disattiva password', 'pw.done': 'Password impostata', 'confirm.pwClear': 'Disattivare la password?',
     'link.title': 'Link di accesso', 'link.hint': 'Link monouso (30 min) per entrare da un altro dispositivo.', 'link.make': 'Genera link',
-    'svc.title': 'Servizio', 'svc.info': 'v{0} · attivo da {1} min · database {2} · lingua server {3}', 'svc.restart': 'Riavvia servizio', 'confirm.restart': 'Riavviare il servizio?', 'svc.restarting': 'Riavvio…',
+    'svc.title': 'Servizio', 'svc.info': '{0} · attivo da {1} min · database {2} · lingua server {3}', 'svc.restart': 'Riavvia servizio', 'confirm.restart': 'Riavviare il servizio?', 'svc.restarting': 'Riavvio…',
   },
 }
 

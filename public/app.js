@@ -95,7 +95,7 @@ function badge(s) { return `<span class="badge ${STATE_CLASS[s] ?? ''}">${esc(t(
 async function loadOverview() {
   state.overview = await api('GET', '/v1/admin/overview')
   state.accounts = state.overview.accounts
-  $('#host').textContent = new URL(state.overview.publicUrl).host + ' · v' + state.overview.version
+  $('#host').textContent = new URL(state.overview.publicUrl).host + ' · ' + (state.overview.versionLabel || state.overview.version)
   $('.subnav[data-for=settings] [data-sub=license]').hidden = !state.overview.license?.enabled
   renderAccounts()
   fillAccountSelects()
@@ -1173,7 +1173,7 @@ $('#logClear').addEventListener('click', () => { logEntries = []; termRender() }
 // ---------------------------------------------------------------- updates (GitHub releases)
 let updTimer = null
 function renderUpdates(u) {
-  $('#updCur').textContent = u.current
+  $('#updCur').textContent = u.currentLabel || u.current
   $('#updLatest').textContent = u.latest ? u.latest.version : u.lastError ? t('upd.unknown') : t('upd.none')
   $('#updAuto').checked = !!u.auto
   $('#updAuto').disabled = u.mode === 'manual'
@@ -1333,7 +1333,7 @@ async function loadSettings() {
   if (!state.overview) await loadOverview()
   const o = state.overview
   showAppearance(s.appearance, o.theme)
-  $('#svcInfo').textContent = t('svc.info', o.version, Math.round(o.uptimeSec / 60), o.database.dialect, o.language?.server === 'it' ? 'Italiano' : 'English')
+  $('#svcInfo').textContent = t('svc.info', o.versionLabel || o.version, Math.round(o.uptimeSec / 60), o.database.dialect, o.language?.server === 'it' ? 'Italiano' : 'English')
 }
 function showAppearance(value, th) {
   $$('#appearCard input[name=appearance]').forEach((r) => { r.checked = r.value === value })

@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
-import { VERSION, config, readBootstrap, writeBootstrap } from '../config.js'
+import { BUILD, VERSION, VERSION_LABEL, config, readBootstrap, writeBootstrap } from '../config.js'
 import { copyAll, maskDbUrl, migrate, now, openDb, parseDbUrl, pingDb } from '../db/index.js'
 import { WEBHOOK_EVENTS, maskHookHeaders, parseHookHeaders, type WaEvent } from '../events.js'
 import { LOG_FILE, logger, onLog, recentLogs } from '../log.js'
@@ -56,7 +56,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   const secure = (req: FastifyRequest) => publicOrigin(req, app.settings.get().publicUrl).startsWith('https://')
 
   // ------------------------------------------------------------------ public
-  f.get('/healthz', { schema: { hide: true } }, async () => ({ ok: true, version: VERSION, connected: app.accounts.list().filter((a) => a.state === 'open').length }))
+  f.get('/healthz', { schema: { hide: true } }, async () => ({ ok: true, version: VERSION, build: BUILD, connected: app.accounts.list().filter((a) => a.state === 'open').length }))
 
   const sendFile = (name: string, type: string, maxAge = 86400) => async (_req: FastifyRequest, reply: FastifyReply) => {
     const p = path.join(PUBLIC_DIR, name)
@@ -635,6 +635,8 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     for (const a of app.accounts.list()) accounts.push({ ...a.status(), stats: await app.svc.stats(a).catch(() => null) })
     return {
       version: VERSION,
+      build: BUILD,
+      versionLabel: VERSION_LABEL,
       publicUrl: publicOrigin(req, app.settings.get().publicUrl),
       database: { dialect: app.h.dialect, url: maskDbUrl(app.h.url), envOverride: !!config.dbUrlEnv },
       accounts,

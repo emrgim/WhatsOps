@@ -15,7 +15,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { VERSION, config } from './config.js'
+import { VERSION, VERSION_LABEL, config } from './config.js'
 import { getSetting, setSetting, type DbHandle } from './db/index.js'
 import { scrambledIssuesKey } from './issues-key.js'
 import { logger, onLog, recentLogs, type LogEntry } from './log.js'
@@ -172,7 +172,7 @@ export class Reports {
 
   diagnostics(): Diagnostics {
     return {
-      WhatsOps: VERSION,
+      WhatsOps: VERSION_LABEL,
       Node: process.version,
       OS: `${os.type()} ${os.release()} (${process.platform}/${process.arch})`,
       ...this.info(),
@@ -255,7 +255,7 @@ export class Reports {
       type: 'malfunction',
       fp: fingerprint('malfunction', head, err),
       title: scrub(head).slice(0, 110),
-      detail: scrub(`Module: ${e.mod ?? '-'}\nVersion: ${VERSION}\nTime: ${fmtTime(e.t)}\n\n${e.msg}\n${extra}\n${err ? '\n' + err + '\n' : ''}\nLast log lines:\n${recentContext(25).join('\n')}`).slice(0, 20_000),
+      detail: scrub(`Module: ${e.mod ?? '-'}\nVersion: ${VERSION_LABEL}\nTime: ${fmtTime(e.t)}\n\n${e.msg}\n${extra}\n${err ? '\n' + err + '\n' : ''}\nLast log lines:\n${recentContext(25).join('\n')}`).slice(0, 20_000),
       version: VERSION,
       at: e.t,
     })
@@ -285,7 +285,7 @@ export class Reports {
   }
 
   private footer(via: string): string {
-    return `\n---\n<sub>Installation \`${this.code}\` · WhatsOps ${VERSION} · ${via}</sub>\n`
+    return `\n---\n<sub>Installation \`${this.code}\` · WhatsOps ${VERSION_LABEL} · ${via}</sub>\n`
   }
 
   private diagBlock(d: Diagnostics): string {

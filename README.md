@@ -2,6 +2,8 @@
 
 # WhatsOps
 
+> **Beta** — WhatsOps is in beta: versions are `0.0.x` (one number per release) and the page shows the build, e.g. `0.0.1 beta (build ae3a1dc)` = the git commit it was built from.
+
 WhatsApp **REST API + MCP server** for your own numbers, built on [Baileys](https://baileys.wiki) v7 (WhatsApp Web linked device).
 
 One process holds one linked-device connection per number and exposes it three ways:

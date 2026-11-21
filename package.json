@@ -1,6 +1,6 @@
 {
   "name": "mcp-mrg-whatsops",
-  "version": "1.7.0",
+  "version": "0.0.1",
   "description": "WhatsOps — WhatsApp REST API + MCP server on Baileys (multi-number, OAuth 2.1, config page)",
   "type": "module",
   "private": true,
@@ -13,7 +13,7 @@
     "mcp-mrg-whatsops": "dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node packaging/stamp-build.mjs",
     "start": "node dist/main.js",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json --noEmit"

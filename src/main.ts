@@ -6,7 +6,7 @@ import formbody from '@fastify/formbody'
 import swagger from '@fastify/swagger'
 import swaggerUi from '@fastify/swagger-ui'
 import { hasZodFastifySchemaValidationErrors, jsonSchemaTransform, serializerCompiler, validatorCompiler } from 'fastify-type-provider-zod'
-import { VERSION, config, currentDbUrl, ensureDataDir } from './config.js'
+import { BUILD, VERSION, config, currentDbUrl, ensureDataDir } from './config.js'
 import { maskDbUrl, migrate, openDb } from './db/index.js'
 import { EventBus, WebhookDispatcher } from './events.js'
 import { logger } from './log.js'
@@ -74,7 +74,7 @@ async function main() {
   ensureDataDir()
   const release = takeLock()
   const dbUrl = currentDbUrl()
-  logger.info({ version: VERSION, db: maskDbUrl(dbUrl) }, 'starting mcp-mrg-whatsops')
+  logger.info({ version: VERSION, build: BUILD, db: maskDbUrl(dbUrl) }, 'starting mcp-mrg-whatsops')
   const h = await openDb(dbUrl)
   await migrate(h)
   const settings = new Settings(h)
