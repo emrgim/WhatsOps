@@ -145,7 +145,7 @@ export class WhisperInstaller {
     if (!have || have.code !== 0 || !have.out.includes(UV_VERSION)) await this.downloadUv()
     // 2. Python, in WhatsOps' own folder
     this.st.step = 'python'
-    fs.rmSync(path.join(this.dir, 'venv'), { recursive: true, force: true })
+    fs.rmSync(path.join(this.dir, 'venv'), { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
     const v = await this.run(uv, ['venv', path.join(this.dir, 'venv'), '--python', PYTHON_VERSION, '--managed-python', '--no-project'], { env, timeoutMs: 15 * 60_000 })
     if (v.code !== 0) throw new AppError('STT_INSTALL', 'faster-whisper could not be installed ({0}): {1}', 502, ['Python', lastLines(v.err || v.out)])
     // 3. faster-whisper and its libraries

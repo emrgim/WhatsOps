@@ -416,6 +416,8 @@ export class VoiceService {
   installLocal(model?: string): void {
     if (!this.installer.supported) throw new AppError('STT_INSTALL_PLATFORM', 'faster-whisper has no ready-made package for this system ({0})', 409, [`${process.platform} ${process.arch}`])
     if (this.installer.st.state === 'running') return
+    // a repair replaces the Python the worker may be running from (Windows locks files in use)
+    this.worker.stop()
     void this.installer
       .install()
       .then(async () => {

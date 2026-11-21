@@ -47,7 +47,13 @@ const r = await w.run(path.join(root, 'test', 'fixtures', 'hello-voice-note.ogg'
 w.stop()
 console.log(`transcribed in ${((Date.now() - t2) / 1000).toFixed(1)} s (${r.language}, ${r.duration?.toFixed(1)} s): ${r.text}`)
 const ok = /hello/i.test(r.text) && /test/i.test(r.text) && /eight|8/i.test(r.text)
-fs.rmSync(tmp, { recursive: true, force: true })
+// Windows keeps a running program's files locked for a moment after it is stopped
+await new Promise((r) => setTimeout(r, 1500))
+try {
+  fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 })
+} catch (e) {
+  console.log(`(temporary folder left behind: ${e.code})`)
+}
 if (!ok) {
   console.error('unexpected text')
   process.exit(1)
