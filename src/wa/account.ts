@@ -15,6 +15,7 @@ import { logger } from '../log.js'
 import type { Settings } from '../settings.js'
 import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
+import { attachProbe, captureLocationKey, PROBE_ON, probeActiveShares, probeSubscribe } from './live-location-probe.js'
 import { audioInfo, WaStore } from './store.js'
 
 export type AccountRow = {
@@ -255,6 +256,8 @@ export class WaAccount {
       keepAliveIntervalMs: 25_000,
     })
     this.sock = sock
+    // research only (WA_LIVE_LOCATION_PROBE=1): what WhatsApp sends a linked device about live locations
+    if (PROBE_ON) attachProbe(sock, this.row.id)
 
     sock.ev.process(async (events) => {
       if (gen !== this.generation) return
@@ -287,6 +290,7 @@ export class WaAccount {
 
         if (events['messages.upsert']) {
           const { messages, type } = events['messages.upsert']
+          if (PROBE_ON) for (const m of messages) void captureLocationKey(sock.signalRepository, m, this.row.id).catch(() => undefined)
           const rows = await this.store.upsertMessages(messages)
           if (this.missingName()) {
             const own = messages.find((m) => m.key.fromMe && m.pushName && !BAD_NAMES.has(m.pushName))
@@ -295,6 +299,10 @@ export class WaAccount {
           for (const r of rows) {
             const summary = await this.summarize(r)
             this.ctx.bus.publish(r.from_me ? 'message.sent' : 'message.received', this.row.id, { ...summary, upsertType: type })
+            if (PROBE_ON && r.type === 'liveLocationMessage' && !r.from_me && type === 'notify') {
+              const k = (JSON.parse(r.raw) as { key?: { remoteJid?: string; remoteJidAlt?: string } }).key ?? {}
+              void probeSubscribe(sock, [...new Set([r.chat_jid, k.remoteJid, k.remoteJidAlt].filter((x): x is string => !!x))], this.row.id).catch(() => undefined)
+            }
           }
         }
 
@@ -369,6 +377,7 @@ export class WaAccount {
       }
     }
     if (u.connection === 'open') {
+      if (PROBE_ON) void probeActiveShares(sock, this.ctx.h, this.row.id).catch(() => undefined)
       this.retry = 0
       this.pairing = undefined
       this.qr = undefined
