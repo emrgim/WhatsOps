@@ -102,7 +102,11 @@ models = {}
 def get(name):
     if name not in models:
         models.clear()
-        models[name] = WhisperModel(name, device="cpu", compute_type="int8")
+        # the model on disk first: no network check that can hang on a slow link
+        try:
+            models[name] = WhisperModel(name, device="cpu", compute_type="int8", local_files_only=True)
+        except Exception:
+            models[name] = WhisperModel(name, device="cpu", compute_type="int8")
     return models[name]
 print(json.dumps({"ready": True}), flush=True)
 for line in sys.stdin:

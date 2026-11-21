@@ -1,4 +1,6 @@
+import dns from 'node:dns'
 import fs from 'node:fs'
+import net from 'node:net'
 import path from 'node:path'
 import Fastify, { LogController, type FastifyInstance } from 'fastify'
 import cookie from '@fastify/cookie'
@@ -27,6 +29,12 @@ import { CurrentRmsPlugin } from './plugins/currentrms.js'
 import { RentmanPlugin } from './plugins/rentman.js'
 import { VoiceService } from './voice.js'
 import { Users } from './users.js'
+
+// Slow or IPv4-only links: Node gives each address 250 ms to connect before giving up on it, so a
+// WhatsApp media server that takes a few seconds is never reached ("Media download failed: fetch
+// failed") and voice messages cannot be transcribed. IPv4 first, and time to connect.
+dns.setDefaultResultOrder('ipv4first')
+net.setDefaultAutoSelectFamilyAttemptTimeout(10_000)
 
 // a crash is written to disk first (Settings → Feedback offers to send it), then systemd/launchd restarts us
 process.on('uncaughtException', (e, origin) => {
