@@ -1,6 +1,6 @@
 {
   "name": "mcp-mrg-whatsops",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "WhatsOps — WhatsApp REST API + MCP server on Baileys (multi-number, OAuth 2.1, config page)",
   "type": "module",
   "private": true,

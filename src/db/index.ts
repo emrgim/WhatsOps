@@ -140,6 +140,24 @@ export const TABLES: TableDef[] = [
     ],
     pk: ['member_id'],
   },
+  // plugin Rentman: projects (list, statuses, last snapshot) and their WhatsApp groups
+  {
+    name: 'rm_projects',
+    cols: [
+      ['id', 'id', 'notnull'], ['name', 'name'], ['number', 'short'], ['creator', 'id'], ['start_at', 'big'], ['end_at', 'big'], ['location', 'name'],
+      ['statuses', 'long'], ['rms_created', 'big'], ['seen_at', 'big'], ['sync', 'int'], ['state', 'short'], ['error', 'long'], ['mode', 'short'],
+      ['auto_at', 'big'], ['off_hand', 'int'], ['snap', 'long'], ['community_jid', 'key'], ['synced_at', 'big'], ['created_at', 'big'],
+    ],
+    pk: ['id'],
+  },
+  {
+    name: 'rm_groups',
+    cols: [
+      ['key', 'key', 'notnull'], ['project_id', 'id'], ['kind', 'short'], ['ref_id', 'id'], ['name', 'name'], ['group_jid', 'key'], ['state', 'short'],
+      ['error', 'long'], ['members', 'long'], ['failed', 'long'], ['admins', 'long'], ['card', 'long'], ['created_at', 'big'], ['updated_at', 'big'],
+    ],
+    pk: ['key'],
+  },
   // a record (opportunity, product…): its Community and its own group (level 1 of "what to sync")
   {
     name: 'crms_objects',

@@ -149,6 +149,30 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   )
 
   tool(
+    'rentman_projects',
+    'Rentman projects',
+    'List the current and upcoming Rentman projects (or the ones matching a search) with their WhatsApp groups: state, structure, crew planned and confirmed, crew without a phone number.',
+    'read',
+    { search: z.string().max(200).optional().describe(L('Filter by project name, number or id')) },
+    { readOnlyHint: true },
+    async (a) => {
+      const pl = app.plugins.rentman
+      if (!pl.configured()) throw new AppError('RM_NOT_CONFIGURED', 'Connect Rentman first (API token)', 409)
+      return pl.projects(a.search)
+    },
+  )
+
+  tool(
+    'rentman_project_group',
+    'WhatsApp groups of a Rentman project',
+    'Create the WhatsApp groups of a Rentman project (structure from the plugin settings: one group, or a Community with a group per subproject or per department) with the crew that accepted the invitation, or stop managing them (the groups stay on WhatsApp). WhatsOps then keeps the crew in line with the planning and posts the project card and its updates. Confirm with the user first.',
+    'send',
+    { project_id: z.string().max(20).describe(L('Rentman project id (from rentman_projects)')), group: z.boolean().describe(L('true = create the groups, false = stop managing them')) },
+    { openWorldHint: true },
+    async (a) => app.plugins.rentman.setGroup(a.project_id, a.group),
+  )
+
+  tool(
     'currentrms_users',
     'Current RMS users',
     'List the Current RMS users with their WhatsApp number (confirmed through their invite link, or from the contacts custom field), the records they own and their access to WhatsOps.',

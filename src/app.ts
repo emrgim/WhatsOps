@@ -11,6 +11,7 @@ import type { Reports } from './reports.js'
 import type { Updater } from './update.js'
 import type { License } from './license.js'
 import type { CurrentRmsPlugin } from './plugins/currentrms.js'
+import type { RentmanPlugin } from './plugins/rentman.js'
 import type { Users } from './users.js'
 import { AppError } from './util.js'
 
@@ -28,7 +29,7 @@ export type App = {
   updater: Updater
   license: License
   users: Users
-  plugins: { currentrms: CurrentRmsPlugin }
+  plugins: { currentrms: CurrentRmsPlugin; rentman: RentmanPlugin }
   restart: (reason: string) => void
 }
 

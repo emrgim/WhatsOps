@@ -6,3 +6,4 @@ Shown only to say which apps WhatsOps connects to. Every name and logo is a trad
 - `hermes.png` — [Hermes Agent](https://github.com/NousResearch/hermes-agent) icon (MIT).
 - `grokbot.png` — Grok Bot app icon.
 - `currentrms.png` — Current RMS / OnRent Events (Klipboard) mark, from current-rms.com.
+- `rentman.png` — Rentman mark, from rentman.io.

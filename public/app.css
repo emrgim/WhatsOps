@@ -209,3 +209,7 @@ ul.sent{margin:0;padding-left:18px}ul.sent li{margin:4px 0}
 .crms-lv input{margin:0;width:auto}
 .crms-rec-group{display:inline-flex;align-items:center;gap:6px;margin-left:auto}
 .crms-nodisc{margin:2px 0 0 18px}
+.rm-auto{display:flex;flex-wrap:wrap;gap:4px 16px;margin:6px 0 2px}.rm-auto label{margin:0}
+.rm-cc{width:90px}
+.rm-hookurl{align-items:center;gap:8px;flex-wrap:nowrap}.rm-hookurl code{word-break:break-all;flex:1 1 auto}.rm-hookurl button{flex:0 0 auto;width:auto}
+.rm-crew{margin:0 0 4px 0}

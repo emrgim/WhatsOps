@@ -24,13 +24,13 @@ English and Italian: the config page follows the browser language, the server (M
 - **Feedback** (Settings → Feedback, or the `whatsops_feedback` MCP tool) opens an issue in this repository without any GitHub login: every installation signs with its own installation code (`WO-XXXX-XXXX`).
 - **Crash and malfunction reports**: crashes and errors are kept (scrubbed of numbers, names, keys and paths) and sent only if you choose: ask first (default), send automatically, or don't collect. The same problem becomes one issue.
 - **Auto-update**: a `git clone` installation checks this repository's releases every 5 minutes, installs a new version by itself (fetch, `npm ci`, build, restart) and goes back to the previous one if the new one does not start. Installations with local changes are never touched.
-- **Plugins** (Connectors → Plugins). First one: **Current RMS** — see below.
-- **Users with granular permissions** (Settings → Users). Besides the owner, users sign in with a code sent to their own WhatsApp number and see only what is enabled for them: by default nothing. Today a user can be given plugins; inside each plugin, its own permissions (Current RMS: only the records they own, or all; manage the plugin or not). Users never get numbers, messages, API keys, MCP or settings, and cannot authorize MCP clients.
+- **Plugins** (Connectors → Plugins): **Current RMS** and **Rentman** — see below.
+- **Users with granular permissions** (Settings → Users). Besides the owner, users sign in with a code sent to their own WhatsApp number and see only what is enabled for them: by default nothing. Today a user can be given plugins; inside each plugin, its own permissions (Current RMS: only the records they own, or all; Rentman: only the projects they created, or all; manage the plugin or not). Users never get numbers, messages, API keys, MCP or settings, and cannot authorize MCP clients.
 - Service log in **Settings → Log**, terminal style (`tail -f`): live, searchable, filterable by level, downloadable; every API change and MCP tool call is listed (never message bodies). Also kept as a rotating file in `<data>/logs/`.
 
 ## MCP tools
 
-`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `currentrms_users`, `currentrms_user_invite`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
+`whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `currentrms_users`, `currentrms_user_invite`, `currentrms_record_group`, `rentman_projects`, `rentman_project_group`, `whatsapp_list_chats`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
 
 ## Install
 
@@ -158,6 +158,27 @@ Links the discussions of [Current RMS](https://www.current-rms.com) (OnRent Even
 **Current RMS users** (plugin → Users): send each one their personal invite link (valid 14 days): they type their WhatsApp number, receive a code on WhatsApp and confirm. From the same list the owner decides who signs in to WhatsOps, and whether they see only the records they own or all, and whether they manage the plugin. A user limited to their own records sees only those discussions and can switch only their sync.
 
 Groups are created one at a time with a pause between them, so WhatsApp does not see a burst. API calls stay under Current RMS' limit of 60 per minute. The same is available from the API (`/v1/plugins/currentrms/…`, levels in `PUT …/config` → `levels`, record groups in `PUT …/records/{type}/{id}`) and MCP (`currentrms_discussions`, `currentrms_set_sync`, `currentrms_record_group`).
+
+## Plugin: Rentman
+
+Gives every [Rentman](https://rentman.io) project its WhatsApp groups with the crew planned on it. Connectors → Plugins → Rentman:
+
+1. **Connection**: the API token (Rentman: Configuration → Integrations → API → Connect → Show token). Use the token you already have: generating a new one switches off the old one in every other integration. The token is stored on the server and never shown again. The account name, country and time zone are read from Rentman.
+2. **Settings**:
+   - **WhatsApp number** that creates every group and Community (their creator) and a **backup number** (admin everywhere; the sync goes on from it while the main number is offline).
+   - **Structure on WhatsApp**: *one group per project* (the whole crew); *Community per project, a group per subproject* (e.g. Day 1, Day 2: each group has only the crew planned on that subproject); *Community per project, a group per department* (a group per function group, e.g. Audio, Lights, Video; functions without a group go in *General*).
+   - **Whoever created the project** in Rentman becomes admin of its groups (their crew phone number).
+   - **A crew member joins** when they **accept the invitation** (default) or **as soon as planned**. Taken off the planning → leaves the group (can be turned off); admins and people added by hand are never removed.
+   - **WhatsOps writes in the group**: the project card (dates, location, who does what and when) and its updates (dates, location, people joining and leaving, changed times), the card only, or nothing. Never rates or phone numbers. Messages in the groups do not go back to Rentman: its public API has no place for them.
+   - **Groups by themselves** when a project reaches a status (e.g. *Confirmed*): only projects reaching it from then on; the others with the switch in the list.
+   - **Country code** for crew numbers written without it (from the Rentman account's country): the leading 0 is dropped, except for Italy.
+   - People who can't be added (privacy settings) get the **invite link** privately (can be turned off).
+3. **Projects**: current and upcoming ones (search for older ones), with status, dates, creator, crew planned and confirmed, crew without a phone number, and a *WhatsApp groups* switch. Switched off, the groups stay on WhatsApp and WhatsOps stops changing them.
+4. **Instant updates**: in Rentman, Configuration → Integrations → Webhooks → Connect, paste the URL shown in the plugin and save, then copy the webhook token Rentman shows into the plugin: every request is checked against its signature (`Digest: sha512=…`). WhatsOps must have a public HTTPS address (`WA_PUBLIC_URL`). With or without webhooks, Rentman is also checked every 2, 5, 15 or 30 minutes with a few calls (only what changed since the last check; Rentman allows 50,000 calls a day and 10 a second).
+
+**Users** (Settings → Users): a user with the Rentman plugin sees all the projects, or only the ones created by the Rentman crew member with their WhatsApp number, and may manage the plugin or not.
+
+The same is available from the API (`/v1/plugins/rentman/…`) and MCP (`rentman_projects`, `rentman_project_group`).
 
 ## Configuration
 

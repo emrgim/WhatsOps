@@ -18,6 +18,7 @@ import { handleMcpRequest } from '../mcp/server.js'
 import { defaultLang, reqLang, setServerLanguage, tr } from '../i18n.js'
 import { currentTheme, desktopTheme } from '../theme.js'
 import { registerCurrentRms } from '../plugins/currentrms.js'
+import { registerRentman } from '../plugins/rentman.js'
 import { normPerms, phoneDigits, pluginAccess } from '../users.js'
 
 declare module 'fastify' {
@@ -72,7 +73,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   f.get('/static/app.css', { schema: { hide: true } }, sendFile('app.css', 'text/css; charset=utf-8', 60))
   f.get('/static/base.css', { schema: { hide: true } }, sendFile('base.css', 'text/css; charset=utf-8', 300))
   f.get('/static/theme.js', { schema: { hide: true } }, sendFile('theme.js', 'application/javascript; charset=utf-8', 300))
-  const LOGOS: Record<string, string> = { 'cursor.svg': 'image/svg+xml', 'claude.svg': 'image/svg+xml', 'chatgpt.svg': 'image/svg+xml', 'grok.svg': 'image/svg+xml', 'gemini.svg': 'image/svg+xml', 'mcp.svg': 'image/svg+xml', 'hermes.png': 'image/png', 'grokbot.png': 'image/png', 'currentrms.png': 'image/png' }
+  const LOGOS: Record<string, string> = { 'cursor.svg': 'image/svg+xml', 'claude.svg': 'image/svg+xml', 'chatgpt.svg': 'image/svg+xml', 'grok.svg': 'image/svg+xml', 'gemini.svg': 'image/svg+xml', 'mcp.svg': 'image/svg+xml', 'hermes.png': 'image/png', 'grokbot.png': 'image/png', 'currentrms.png': 'image/png', 'rentman.png': 'image/png' }
   f.get('/static/logos/:name', { schema: { hide: true, params: z.object({ name: z.string() }) } }, async (req, reply) => {
     const type = LOGOS[req.params.name]
     if (!type) return reply.code(404).send()
@@ -581,13 +582,16 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   })
 
   // ---- plugins
-  const PLUGINS = [{ id: 'currentrms', name: 'Current RMS', logo: 'currentrms.png' }]
+  const PLUGINS = [
+    { id: 'currentrms', name: 'Current RMS', logo: 'currentrms.png' },
+    { id: 'rentman', name: 'Rentman', logo: 'rentman.png' },
+  ] as const
   f.get('/v1/plugins', { preHandler: signedIn, schema: { ...tags('Plugins'), summary: 'Installed plugins (a user sees only the ones enabled for them)' } }, async (req) => {
     const p = P(req)
     if (p.kind !== 'user') requireScope(p, 'read')
     return PLUGINS.filter((x) => p.kind !== 'user' || pluginAccess(p.user, x.id)).map((x) => ({
       ...x,
-      configured: app.plugins.currentrms.configured(),
+      configured: app.plugins[x.id].configured(),
       ...(p.kind === 'user' ? { perms: pluginAccess(p.user, x.id) } : {}),
     }))
   })
@@ -624,6 +628,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     return { url: `${publicOrigin(req, app.settings.get().publicUrl)}/login?u=${encodeURIComponent(u.id)}&t=${t}`, expiresInMin: 30 }
   })
   registerCurrentRms(fastify, app, app.plugins.currentrms, guard, tags)
+  registerRentman(fastify, app, app.plugins.rentman, tags)
 
   // ---- license (Polar) — off while WhatsOps is free
   f.get('/v1/admin/license', { preHandler: guard('admin'), schema: { ...tags('Admin'), summary: 'License state (off while WhatsOps is free)' } }, async () => app.license.status())

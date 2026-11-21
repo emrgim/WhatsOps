@@ -24,6 +24,7 @@ import { Reports, recordCrashSync } from './reports.js'
 import { Updater } from './update.js'
 import { License } from './license.js'
 import { CurrentRmsPlugin } from './plugins/currentrms.js'
+import { RentmanPlugin } from './plugins/rentman.js'
 import { Users } from './users.js'
 
 // a crash is written to disk first (Settings → Feedback offers to send it), then systemd/launchd restarts us
@@ -190,6 +191,7 @@ async function main() {
   })
 
   app.plugins.currentrms = new CurrentRmsPlugin(app)
+  app.plugins.rentman = new RentmanPlugin(app)
   oauth.register(fastify)
   registerRoutes(fastify, app)
 
@@ -199,6 +201,7 @@ async function main() {
   await accounts.loadAll()
   updater.start()
   await app.plugins.currentrms.start()
+  await app.plugins.rentman.start()
 
   setInterval(() => {
     void oauth.prune().catch(() => undefined)

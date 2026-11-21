@@ -33,13 +33,13 @@ import { reqLang, tr, type Lang } from '../i18n.js'
 import { phoneDigits, pluginAccess, type User } from '../users.js'
 import { joinPage, messagePage } from '../ui/pages.js'
 import type { WaAccount } from '../wa/account.js'
+import { paceGroups, planAdmins } from './wagroups.js'
 
 export const PLUGIN_ID = 'currentrms'
 const API = (process.env.WA_CRMS_API || 'https://api.current-rms.com/api/v1').replace(/\/+$/, '')
 const CONFIG_KEY = 'plugin:currentrms'
 export const POLL_CHOICES = [2, 5, 15, 30] as const // minutes between checks of the synced discussions
 const LIST_REFRESH_MS = 30 * 60_000
-const GROUP_GAP_MS = 45_000 // never create WhatsApp groups in a burst
 const MAX_CHUNK = 3500
 
 // ------------------------------------------------------------------ what to sync (3 levels per record type)
@@ -174,17 +174,7 @@ export type Scope = { member: string | null } | null
 const INVITE_DAYS = 14
 const mask = (d: string | null | undefined) => (d ? `+${d.slice(0, 2)} ••• ${d.slice(-4)}` : null)
 
-/** Who must be added to a group and who promoted to admin, given the group's participants. */
-export function planAdmins(participants: { id: string; phoneNumber?: string; admin?: string | null }[], phones: string[]): { add: string[]; promote: string[] } {
-  const add: string[] = []
-  const promote: string[] = []
-  for (const ph of phones) {
-    const p = participants.find((x) => userOf(x.phoneNumber ?? '') === ph || (x.id.endsWith('@s.whatsapp.net') && userOf(x.id) === ph))
-    if (!p) add.push(ph)
-    else if (!p.admin) promote.push(p.id)
-  }
-  return { add, promote }
-}
+export { planAdmins } from './wagroups.js'
 
 /** Discussable types → API collection, name field, path in the web app, short label. */
 const TYPES: Record<string, { coll: string; one: string; name: string; web: string; short: string }> = {
@@ -233,7 +223,6 @@ export class CurrentRmsPlugin {
   private calls: number[] = []
   private locks = new Map<string, Promise<unknown>>()
   private ownSent = new Set<string>() // WhatsApp ids we are sending right now (mirrors)
-  private lastGroupAt = 0
   private refreshing: Promise<void> | null = null
   lastRefresh = 0
   lastPoll = 0
@@ -244,7 +233,6 @@ export class CurrentRmsPlugin {
   private adminRunning = false
   private draining = false
   private capLogged = 0
-  private groupGate: Promise<void> = Promise.resolve()
 
   constructor(private app: App) {}
 
@@ -678,14 +666,9 @@ export class CurrentRmsPlugin {
     return clip(`${t?.short ? t.short + ' ' : ''}${obj} · ${subject}`, 100)
   }
 
+  /** One new group at a time, 45 s apart, shared with every plugin. */
   private paceGroups(): Promise<void> {
-    const turn = this.groupGate.then(async () => {
-      const wait = this.lastGroupAt + GROUP_GAP_MS - Date.now()
-      if (wait > 0) await sleep(wait)
-      this.lastGroupAt = Date.now()
-    })
-    this.groupGate = turn.catch(() => undefined)
-    return turn
+    return paceGroups()
   }
 
   /** Sealed: only admins add people or change the group, new members need approval. */

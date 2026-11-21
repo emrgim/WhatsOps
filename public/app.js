@@ -374,6 +374,7 @@ async function loadPlugins() {
   $('#pluginDetail').hidden = !c
   if (c) {
     if (c.id === 'currentrms') { const st = await api('GET', CRMS); $('#pluginDetail').innerHTML = (isUser() && PLUGINS.length === 1 ? detailHead(c, null) : detailHead(c, 'plugins')) + CRMS_HTML(st); await crmsLoad(st) }
+    else if (c.id === 'rentman') { const st = await api('GET', RM); $('#pluginDetail').innerHTML = (isUser() && PLUGINS.length === 1 ? detailHead(c, null) : detailHead(c, 'plugins')) + RM_HTML(st); await rmLoad(st) }
     else $('#pluginDetail').innerHTML = detailHead(c, 'plugins')
     return
   }
@@ -635,6 +636,201 @@ document.addEventListener('click', run(async (e) => {
 }))
 let crmsQT = null
 document.addEventListener('input', (e) => { if (e.target.id === 'crmsQ') { clearTimeout(crmsQT); crmsQT = setTimeout(() => crmsTree().catch(() => {}), 300) } })
+
+// ---------------------------------------------------------------- plugin: Rentman
+const RM = '/v1/plugins/rentman'
+let rmTimer = null
+const RM_MODES = ['project', 'subproject', 'department']
+function RM_HTML(st) {
+  const can = { manage: !st.me || st.me.manage, owner: !isUser() }
+  const seg = (name, vals, label) => `<div class="seg" role="radiogroup">${vals.map((v) => `<label><input type="radio" name="${name}" value="${v}"><span>${esc(t(label + v))}</span></label>`).join('')}</div>`
+  const mine = st.me ? `<div class="card"><p>${esc(t(st.me.scope === 'all' ? 'rm.me.all' : 'rm.me.owned'))}</p></div>` : ''
+  return `${mine}
+  <div class="card">
+    <div class="crms-bar"><h3>${esc(t('rm.projects'))}</h3><input type="search" id="rmQ" placeholder="${esc(t('rm.search'))}"><button type="button" class="ghost small" data-rm="refresh">${esc(t('crms.refresh'))}</button></div>
+    <p class="muted small" id="rmInfo"></p>
+    <div id="rmList"></div>
+  </div>
+  ${can.manage ? `<form class="card form" id="rmConn">
+    <h3>${esc(t('crms.conn'))}</h3>
+    <label><span>${esc(t('rm.token'))}</span> <input name="token" type="password" autocomplete="new-password" spellcheck="false"></label>
+    <p class="muted small">${esc(t('rm.tokenHint'))}</p>
+    <div class="row"><button type="submit">${esc(t('save'))}</button><button type="button" class="ghost" data-rm="test">${esc(t('crms.test'))}</button></div>
+    <p id="rmConnState" class="small"></p>
+  </form>
+  <form class="card form" id="rmSet">
+    <h3>${esc(t('crms.settings'))}</h3>
+    ${can.owner ? `<label><span>${esc(t('crms.account'))}</span> <select name="account"></select></label>
+    <p class="muted small">${esc(t('rm.accountHint'))}</p>
+    <label><span>${esc(t('crms.backup'))}</span> <select name="backupAccount"></select></label>
+    <p class="muted small">${esc(t('rm.backupHint'))}</p>` : ''}
+    <div><span class="muted small">${esc(t('rm.mode'))}</span><br>${seg('mode', RM_MODES, 'rm.mode.')}<p class="muted small" id="rmModeHint"></p></div>
+    <label class="inline"><input type="checkbox" name="creatorAdmin"> <span>${esc(t('rm.creatorAdmin'))}</span></label>
+    <p class="muted small">${esc(t('rm.creatorAdminHint'))}</p>
+    <div><span class="muted small">${esc(t('rm.joinOn'))}</span><br>${seg('joinOn', ['accepted', 'planned'], 'rm.joinOn.')}<p class="muted small" id="rmJoinHint"></p></div>
+    <label class="inline"><input type="checkbox" name="removeOnUnplan"> <span>${esc(t('rm.remove'))}</span></label>
+    <p class="muted small">${esc(t('rm.removeHint'))}</p>
+    <div><span class="muted small">${esc(t('rm.posts'))}</span><br>${seg('posts', ['updates', 'card', 'none'], 'rm.posts.')}<p class="muted small">${esc(t('rm.postsHint'))}</p></div>
+    <div><span class="muted small">${esc(t('rm.auto'))}</span><div id="rmAuto" class="rm-auto"></div><p class="muted small">${esc(t('rm.autoHint'))}</p></div>
+    <label><span>${esc(t('rm.cc'))}</span> <input name="countryCode" inputmode="numeric" maxlength="4" class="rm-cc"></label>
+    <p class="muted small">${esc(t('rm.ccHint'))}</p>
+    <label class="inline"><input type="checkbox" name="inviteFallback"> <span>${esc(t('crms.invite'))}</span></label>
+    <div class="row"><button type="submit">${esc(t('save'))}</button></div>
+  </form>
+  <div class="card form" id="rmHooks">
+    <h3>${esc(t('crms.hooks'))}</h3>
+    <p class="small" id="rmHookState"></p>
+    <p class="muted small">${esc(t('rm.hooksHint'))}</p>
+    <div class="row rm-hookurl"><code id="rmHookUrl" class="small"></code><button type="button" class="small" id="rmHookCopy" data-copy="">${esc(t('copy'))}</button></div>
+    <label><span>${esc(t('rm.hookToken'))}</span> <input id="rmHookTok" type="password" autocomplete="new-password" spellcheck="false"></label>
+    <div class="row"><button type="button" class="ghost" data-rm="hooktok">${esc(t('save'))}</button></div>
+    <div><span class="muted small">${esc(t('crms.poll'))}</span><br><div class="seg" role="radiogroup" id="rmPoll">
+      ${[2, 5, 15, 30].map((m) => `<label><input type="radio" name="rmPollMinutes" value="${m}"><span>${esc(t('crms.pollMin', m))}</span></label>`).join('')}</div>
+      <p class="muted small" id="rmPollHint"></p></div>
+  </div>` : ''}`
+}
+function rmHints(f) {
+  const mode = f?.querySelector('input[name=mode]:checked')?.value
+  if ($('#rmModeHint')) $('#rmModeHint').textContent = mode ? t('rm.modeHint.' + mode) : ''
+  const j = f?.querySelector('input[name=joinOn]:checked')?.value
+  if ($('#rmJoinHint')) $('#rmJoinHint').textContent = j ? t('rm.joinHint.' + j) : ''
+}
+function rmHookState(c) {
+  if (!$('#rmHooks')) return
+  const url = c.hookUrl ? (state.overview?.publicUrl || location.origin).replace(/\/+$/, '') + c.hookUrl : ''
+  $('#rmHookUrl').textContent = url
+  $('#rmHookCopy').dataset.copy = url
+  $('#rmHookTok').placeholder = c.webhookTokenSet ? t('rm.saved') : ''
+  const every = c.pollMinutes || 2
+  $('#rmHookState').textContent = c.lastHookAt ? t('rm.hookLast', fmtDate(new Date(c.lastHookAt).toISOString())) + (c.webhookTokenSet ? '' : ' · ' + t('rm.hookNoToken')) : t('crms.hooksOff', every)
+  $$('#rmPoll input').forEach((i) => { i.checked = Number(i.value) === every })
+  $('#rmPollHint').textContent = t('rm.pollHint', every)
+}
+let rmTz = ''
+async function rmLoad(st) {
+  const s = st ?? (await api('GET', RM))
+  const c = s.config
+  rmTz = c.timezone || ''
+  const f1 = $('#rmConn'), f2 = $('#rmSet')
+  if (f1 && f2) {
+    f1.token.placeholder = c.tokenSet ? t('rm.saved') : ''
+    $('#rmConnState').textContent = s.configured ? (c.workspace ? t('rm.connected', c.workspace + (c.company ? ' · ' + c.company : '')) : t('rm.tokenSaved')) : t('crms.notConnected')
+    if (f2.account) {
+      const accs = state.accounts ?? []
+      const opt = (a) => `<option value="${esc(a.id)}">${esc(a.name)} ${esc(a.me?.phone ?? '')}</option>`
+      f2.account.innerHTML = accs.map(opt).join('')
+      f2.account.value = c.account || (accs.find((a) => a.default)?.id ?? '')
+      f2.backupAccount.innerHTML = `<option value="">${esc(t('crms.backupNone'))}</option>` + accs.filter((a) => a.id !== f2.account.value).map(opt).join('')
+      f2.backupAccount.value = c.backupAccount || ''
+    }
+    $$('input[name=mode]', f2).forEach((i) => { i.checked = i.value === (c.mode || 'project') })
+    $$('input[name=joinOn]', f2).forEach((i) => { i.checked = i.value === (c.joinOn || 'accepted') })
+    $$('input[name=posts]', f2).forEach((i) => { i.checked = i.value === (c.posts || 'updates') })
+    f2.creatorAdmin.checked = c.creatorAdmin !== false
+    f2.removeOnUnplan.checked = c.removeOnUnplan !== false
+    f2.inviteFallback.checked = c.inviteFallback !== false
+    f2.countryCode.value = c.countryCode || ''
+    rmHints(f2)
+    rmHookState(c)
+    $('#rmAuto').innerHTML = `<span class="muted small">${esc(t(s.configured ? 'crms.reading' : 'crms.notConnected'))}</span>`
+    if (s.configured) {
+      api('GET', RM + '/statuses').then((list) => {
+        $('#rmAuto').innerHTML = list.length ? list.map((x) => `<label class="inline small"><input type="checkbox" name="autoStatus" value="${esc(x.id)}" ${(c.autoStatuses || []).includes(x.id) ? 'checked' : ''}> <span>${esc(x.name)}</span></label>`).join('') : `<span class="muted small">—</span>`
+      }).catch((e) => { $('#rmAuto').innerHTML = `<span class="small err-text">${esc(e.message)}</span>` })
+    }
+  }
+  if (s.configured) await rmList()
+  else $('#rmList').innerHTML = `<p class="muted">${esc(t(f1 ? 'rm.connectFirst' : 'crms.notConnected'))}</p>`
+}
+const rmDates = (p) => {
+  if (!p.start && !p.end) return ''
+  // in the Rentman account's time zone, like Rentman shows them
+  const d = (x) => { try { return new Date(x).toLocaleDateString(undefined, { day: 'numeric', month: 'short', timeZone: rmTz || undefined }) } catch { return new Date(x).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }) } }
+  return p.start && p.end && d(p.start) !== d(p.end) ? `${d(p.start)} → ${d(p.end)}` : d(p.start || p.end)
+}
+async function rmList() {
+  const q = $('#rmQ')?.value ?? ''
+  const list = await api('GET', RM + '/projects' + (q ? '?q=' + encodeURIComponent(q) : ''))
+  $('#rmInfo').textContent = t('rm.count', num(list.length), num(list.filter((p) => p.sync).length))
+  $('#rmList').innerHTML = list.length ? list.map((p) => `<div class="crms-rec">
+      <div class="crms-rec-head">${p.statuses.map((x) => `<span class="badge">${esc(x)}</span>`).join(' ')} <b>${esc(p.name || '#' + p.id)}</b>${p.number ? ` <span class="muted small">${esc(p.number)}</span>` : ''} <span class="muted small">${esc(rmDates(p))}</span>${p.creator ? ` <span class="muted small" title="${esc(t(p.creator.whatsapp ? 'rm.creatorOk' : 'rm.creatorNoPhone'))}">${esc(t('rm.creator', p.creator.name))}${p.creator.whatsapp ? ' ✓' : ''}</span>` : ''}${p.url ? ` <a class="small" href="${esc(p.url)}" target="_blank" rel="noopener">${esc(t('rm.open'))} ↗</a>` : ''}
+        <span class="crms-rec-group"><label class="switch" title="${esc(t('rm.groups'))}"><input type="checkbox" ${p.sync ? 'checked' : ''} data-rmsync="${esc(p.id)}"><span></span></label> <span class="small">${esc(t('rm.groups'))}</span>${p.sync || p.groups.length ? ` <span class="badge ${crmsBadge(p.state)}">${esc(t('rm.state.' + (p.state || 'off')))}</span>` : ''}</span></div>
+      ${p.error ? `<div class="small err-text">${esc(p.error)}</div>` : ''}
+      ${p.crew ? `<div class="muted small rm-crew">${esc(t('rm.crewCount', p.crew.planned, p.crew.confirmed))}${p.crew.noPhone.length ? ' · ' + esc(t('rm.noPhone', p.crew.noPhone.join(', '))) : ''}</div>` : ''}
+      ${p.groups.map((g) => `<div class="crms-disc"><div class="crms-disc-main"><b>${esc(g.name || '')}</b> <span class="muted small">${esc(t('rm.kind.' + g.kind))} · ${esc(t('rm.members', g.members))}</span>${g.error ? `<div class="small err-text">${esc(g.error)}</div>` : ''}</div><span class="badge ${crmsBadge(g.state)}">${esc(t('rm.gstate.' + (g.state || 'on')))}</span></div>`).join('')}
+    </div>`).join('') : `<p class="muted">${esc(t(isUser() ? 'rm.noneMine' : 'rm.none'))}</p>`
+  clearTimeout(rmTimer)
+  if (list.some((p) => p.state === 'creating' || p.state === 'queued')) rmTimer = setTimeout(() => routeItem === 'rentman' && rmList().catch(() => {}), 4000)
+}
+async function rmRefresh() {
+  $('#rmInfo').textContent = t('rm.reading')
+  const s = await api('POST', RM + '/refresh')
+  await rmList()
+  if (s.refreshing) setTimeout(() => routeItem === 'rentman' && rmList().catch(() => {}), 5000)
+}
+document.addEventListener('submit', run(async (e) => {
+  if (e.target.id === 'rmConn') {
+    e.preventDefault()
+    const f = e.target
+    if (f.token.value) await api('PUT', RM + '/config', { token: f.token.value })
+    f.token.value = ''
+    const r = await api('POST', RM + '/test')
+    toast(t('rm.testOk', r.workspace || r.company || ''))
+    await rmLoad()
+    await rmRefresh()
+  } else if (e.target.id === 'rmSet') {
+    e.preventDefault()
+    const f = e.target
+    const val = (n) => f.querySelector(`input[name=${n}]:checked`)?.value
+    await api('PUT', RM + '/config', {
+      ...(f.account ? { account: f.account.value, backupAccount: f.backupAccount.value } : {}),
+      mode: val('mode') ?? 'project', joinOn: val('joinOn') ?? 'accepted', posts: val('posts') ?? 'updates',
+      creatorAdmin: f.creatorAdmin.checked, removeOnUnplan: f.removeOnUnplan.checked, inviteFallback: f.inviteFallback.checked,
+      countryCode: f.countryCode.value.trim(),
+      ...($('#rmAuto input') ? { autoStatuses: $$('input[name=autoStatus]:checked', f).map((i) => i.value) } : {}),
+    })
+    toast(t('saved'))
+  }
+}))
+document.addEventListener('change', run(async (e) => {
+  const f = e.target.closest('#rmSet')
+  if (f && (e.target.name === 'mode' || e.target.name === 'joinOn')) rmHints(f)
+  if (f && e.target.name === 'account') {
+    const keep = f.backupAccount.value
+    f.backupAccount.innerHTML = `<option value="">${esc(t('crms.backupNone'))}</option>` + (state.accounts ?? []).filter((a) => a.id !== f.account.value).map((a) => `<option value="${esc(a.id)}">${esc(a.name)} ${esc(a.me?.phone ?? '')}</option>`).join('')
+    f.backupAccount.value = keep !== f.account.value ? keep : ''
+  }
+  if (e.target.name === 'rmPollMinutes') {
+    const s = await api('PUT', RM + '/config', { pollMinutes: Number(e.target.value) })
+    rmHookState(s.config)
+    toast(t('saved'))
+    return
+  }
+  const sw = e.target.closest('[data-rmsync]')
+  if (!sw) return
+  const on = sw.checked
+  if (on && !confirm(t('rm.confirmOn'))) { sw.checked = false; return }
+  try { await api('PUT', `${RM}/projects/${encodeURIComponent(sw.dataset.rmsync)}`, { group: on }) } catch (x) { sw.checked = !on; throw x }
+  await rmList()
+}))
+document.addEventListener('click', run(async (e) => {
+  const b = e.target.closest('[data-rm]')
+  if (!b) return
+  b.disabled = true
+  try {
+    if (b.dataset.rm === 'test') { const r = await api('POST', RM + '/test'); toast(t('rm.testOk', r.workspace || r.company || '')); await rmLoad() }
+    if (b.dataset.rm === 'refresh') await rmRefresh()
+    if (b.dataset.rm === 'hooktok') {
+      const tok = $('#rmHookTok')
+      const s = await api('PUT', RM + '/config', { webhookToken: tok.value })
+      tok.value = ''
+      rmHookState(s.config)
+      toast(t('saved'))
+    }
+  } finally { b.disabled = false }
+}))
+let rmQT = null
+document.addEventListener('input', (e) => { if (e.target.id === 'rmQ') { clearTimeout(rmQT); rmQT = setTimeout(() => rmList().catch(() => {}), 300) } })
 
 // ---------------------------------------------------------------- users (Settings → Users): who signs in besides the owner
 let USERS = []
