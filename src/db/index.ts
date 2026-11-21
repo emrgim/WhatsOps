@@ -241,7 +241,7 @@ export const TABLES: TableDef[] = [
     name: 'webhooks',
     cols: [
       ['id', 'id', 'notnull'], ['url', 'url'], ['events', 'url'], ['account_id', 'id'], ['secret', 'name'],
-      ['active', 'int'], ['created_at', 'big'],
+      ['active', 'int'], ['created_at', 'big'], ['headers', 'url'],
     ],
     pk: ['id'],
   },

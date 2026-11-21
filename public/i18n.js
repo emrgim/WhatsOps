@@ -53,7 +53,7 @@ window.WA_I18N = {
     'hooks.eventsHint': 'Events: * · message.received · message.sent · message.update · connection.update · history.sync · chat.update', 'hooks.add': 'Add webhook',
     'hooks.created': 'Webhook created. Secret to verify the signature (shown once):', 'hooks.none': 'No webhooks.', 'hooks.active': 'active', 'hooks.paused': 'paused',
     'hooks.test': 'Test', 'hooks.pause': 'Pause', 'hooks.enable': 'Enable', 'hooks.deliveries': 'Latest deliveries', 'hooks.noDeliveries': 'No deliveries.',
-    'hooks.testSent': 'Test event sent', 'confirm.deleteHook': 'Delete the webhook?', 'hooks.delete': 'Delete',
+    'hooks.testSent': 'Test event sent', 'th.auth': 'Header', 'hooks.auth': 'Key or header (optional)', 'hooks.authPh': 'crsr_…  or  Authorization: Bearer crsr_…', 'hooks.authHint': 'For receivers that want their own key (Cursor and Grok Bot automations, Zapier, Make, n8n…): paste the key or the whole header line. A key alone is sent as Authorization: Bearer <key>. Each delivery also carries a "context" line in plain words.', 'hooks.key': 'Key', 'hooks.keyRemove': 'Remove', 'hooks.keyRemoveConfirm': 'Remove the key / header of this webhook?', 'hooks.keySaved': 'Key saved', 'hooks.keyRemoved': 'Key removed', 'hooks.testOk': 'Test delivered (HTTP {0})', 'hooks.testFail': 'Test not delivered: {0}', 'confirm.deleteHook': 'Delete the webhook?', 'hooks.delete': 'Delete',
     'settings.title': 'Settings', 'set.rate': 'Messages per minute (per number)', 'set.gap': 'Pause per chat (ms)', 'set.allow': 'Allowed recipients',
     'set.allowPh': '* or +971501234567, 3912345678@s.whatsapp.net', 'set.cold': 'Allow messages to numbers never contacted before', 'set.otp': 'Sign-in with a code sent on WhatsApp',
     'set.ttl': 'OAuth token lifetime (s)', 'set.refresh': 'OAuth refresh (days)', 'set.publicUrl': 'Public URL', 'set.maxMedia': 'Max media (MB)',
@@ -114,7 +114,7 @@ window.WA_I18N = {
     'hooks.eventsHint': 'Eventi: * · message.received · message.sent · message.update · connection.update · history.sync · chat.update', 'hooks.add': 'Aggiungi webhook',
     'hooks.created': 'Webhook creato. Secret per verificare la firma (mostrato una volta):', 'hooks.none': 'Nessun webhook.', 'hooks.active': 'attivo', 'hooks.paused': 'sospeso',
     'hooks.test': 'Test', 'hooks.pause': 'Sospendi', 'hooks.enable': 'Attiva', 'hooks.deliveries': 'Ultime consegne', 'hooks.noDeliveries': 'Nessuna consegna.',
-    'hooks.testSent': 'Evento di test inviato', 'confirm.deleteHook': 'Eliminare il webhook?', 'hooks.delete': 'Elimina',
+    'hooks.testSent': 'Evento di test inviato', 'th.auth': 'Intestazione', 'hooks.auth': 'Chiave o header (facoltativo)', 'hooks.authPh': 'crsr_…  oppure  Authorization: Bearer crsr_…', 'hooks.authHint': 'Per i destinatari che vogliono una loro chiave (automazioni di Cursor e Grok Bot, Zapier, Make, n8n…): incolla la chiave o la riga intera dell’header. Una chiave da sola viene mandata come Authorization: Bearer <chiave>. Ogni consegna porta anche una riga "context" in parole semplici.', 'hooks.key': 'Chiave', 'hooks.keyRemove': 'Rimuovi', 'hooks.keyRemoveConfirm': 'Rimuovere la chiave / l’header di questo webhook?', 'hooks.keySaved': 'Chiave salvata', 'hooks.keyRemoved': 'Chiave rimossa', 'hooks.testOk': 'Test consegnato (HTTP {0})', 'hooks.testFail': 'Test non consegnato: {0}', 'confirm.deleteHook': 'Eliminare il webhook?', 'hooks.delete': 'Elimina',
     'settings.title': 'Impostazioni', 'set.rate': 'Messaggi al minuto (per numero)', 'set.gap': 'Pausa per chat (ms)', 'set.allow': 'Destinatari consentiti',
     'set.allowPh': '* oppure +971501234567, 3912345678@s.whatsapp.net', 'set.cold': 'Consenti messaggi a numeri mai contattati', 'set.otp': 'Accesso con codice via WhatsApp',
     'set.ttl': 'Durata token OAuth (s)', 'set.refresh': 'Refresh OAuth (giorni)', 'set.publicUrl': 'URL pubblico', 'set.maxMedia': 'Media max (MB)',
@@ -149,6 +149,10 @@ window.WA_I18N = {
 
 /* API vocabulary (OpenAPI summaries and tags) in Italian */
 window.WA_API_IT = {
+ "Create webhook. Events: * or message.received, message.sent, message.update, connection.update, history.sync, chat.update, profile.update. Signature: X-WA-Signature = sha256=HMAC(secret, X-WA-Timestamp + \".\" + body). headers: the receiver's key or header lines (e.g. Authorization: Bearer <key>)": "Crea un webhook. Eventi: * oppure message.received, message.sent, message.update, connection.update, history.sync, chat.update, profile.update. Firma: X-WA-Signature = sha256=HMAC(secret, X-WA-Timestamp + \".\" + body). headers: la chiave del destinatario o righe di header (es. Authorization: Bearer <chiave>)",
+ "Update webhook (headers: \"\" removes the extra headers)": "Aggiorna un webhook (headers: \"\" rimuove gli header aggiuntivi)",
+ "Send a test event to this webhook only": "Invia un evento di prova solo a questo webhook",
+ "Set disappearing messages for a chat and/or the account default": "Imposta i messaggi effimeri per una chat e/o il predefinito del numero",
  "Rentman: connection, settings, webhook state": "Rentman: connessione, impostazioni, stato dei webhook",
  "Rentman: save the connection and the plugin settings": "Rentman: salva la connessione e le impostazioni del plugin",
  "Rentman: test the connection (account name, country, time zone)": "Rentman: prova la connessione (nome dell'account, paese, fuso orario)",

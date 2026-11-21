@@ -6,7 +6,7 @@ import type { ZodTypeProvider } from 'fastify-type-provider-zod'
 import { z } from 'zod'
 import { VERSION, config, readBootstrap, writeBootstrap } from '../config.js'
 import { copyAll, maskDbUrl, migrate, now, openDb, parseDbUrl, pingDb } from '../db/index.js'
-import { WEBHOOK_EVENTS, type WaEvent } from '../events.js'
+import { WEBHOOK_EVENTS, maskHookHeaders, parseHookHeaders, type WaEvent } from '../events.js'
 import { LOG_FILE, logger, onLog, recentLogs } from '../log.js'
 import { accountFor, authenticate, requireScope, visibleAccounts, type App } from '../app.js'
 import { SESSION_COOKIE, publicOrigin, randomToken, requestIp, type Principal } from '../security/auth.js'
@@ -803,9 +803,10 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   })
 
   // ---- webhooks
+  const HOOK_HEADERS = z.union([z.string().max(8000), z.record(z.string(), z.string())])
   f.get('/v1/admin/webhooks', { preHandler: guard('admin'), schema: { ...tags('Webhooks'), summary: 'List webhooks' } }, async () => {
     const hooks = await app.h.db.selectFrom('webhooks').selectAll().orderBy('created_at').execute()
-    return hooks.map((h) => ({ ...h, secret: h.secret.slice(0, 6) + '…' }))
+    return hooks.map((h) => ({ ...h, secret: h.secret.slice(0, 6) + '…', headers: maskHookHeaders(h.headers as string | null) }))
   })
   f.post(
     '/v1/admin/webhooks',
@@ -813,26 +814,42 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       preHandler: guard('admin'),
       schema: {
         ...tags('Webhooks'),
-        summary: `Create webhook. Events: * or ${WEBHOOK_EVENTS.join(', ')}. Signature: X-WA-Signature = sha256=HMAC(secret, X-WA-Timestamp + "." + body)`,
-        body: z.object({ url: z.url(), events: z.string().default('*'), account: z.string().default('*') }),
+        summary: `Create webhook. Events: * or ${WEBHOOK_EVENTS.join(', ')}. Signature: X-WA-Signature = sha256=HMAC(secret, X-WA-Timestamp + "." + body). headers: the receiver's key or header lines (e.g. Authorization: Bearer <key>)`,
+        body: z.object({ url: z.url(), events: z.string().default('*'), account: z.string().default('*'), headers: HOOK_HEADERS.optional() }),
       },
     },
     async (req, reply) => {
       const id = crypto.randomUUID()
       const secret = randomToken('whs_', 24)
-      await app.h.db.insertInto('webhooks').values({ id, url: req.body.url, events: req.body.events, account_id: req.body.account, secret, active: 1, created_at: now() }).execute()
+      const headers = parseHookHeaders(req.body.headers)
+      await app.h.db
+        .insertInto('webhooks')
+        .values({ id, url: req.body.url, events: req.body.events, account_id: req.body.account, secret, active: 1, created_at: now(), headers: Object.keys(headers).length ? JSON.stringify(headers) : null })
+        .execute()
       await app.webhooks.reload()
-      return reply.code(201).send({ id, url: req.body.url, events: req.body.events, account: req.body.account, secret })
+      return reply.code(201).send({ id, url: req.body.url, events: req.body.events, account: req.body.account, secret, headers: maskHookHeaders(JSON.stringify(headers)) })
     },
   )
   f.patch(
     '/v1/admin/webhooks/:id',
-    { preHandler: guard('admin'), schema: { ...tags('Webhooks'), summary: 'Update webhook', params: z.object({ id: z.string() }), body: z.object({ active: z.boolean().optional(), events: z.string().optional(), url: z.url().optional() }) } },
+    {
+      preHandler: guard('admin'),
+      schema: {
+        ...tags('Webhooks'),
+        summary: 'Update webhook (headers: "" removes the extra headers)',
+        params: z.object({ id: z.string() }),
+        body: z.object({ active: z.boolean().optional(), events: z.string().optional(), url: z.url().optional(), headers: HOOK_HEADERS.optional() }),
+      },
+    },
     async (req) => {
       const set: Record<string, unknown> = {}
       if (req.body.active !== undefined) set.active = req.body.active ? 1 : 0
       if (req.body.events) set.events = req.body.events
       if (req.body.url) set.url = req.body.url
+      if (req.body.headers !== undefined) {
+        const headers = parseHookHeaders(req.body.headers)
+        set.headers = Object.keys(headers).length ? JSON.stringify(headers) : null
+      }
       if (Object.keys(set).length) await app.h.db.updateTable('webhooks').set(set).where('id', '=', req.params.id).execute()
       await app.webhooks.reload()
       return { ok: true }
@@ -846,11 +863,9 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   f.get('/v1/admin/webhooks/deliveries', { preHandler: guard('admin'), schema: { ...tags('Webhooks'), summary: 'Recent deliveries' } }, async () =>
     app.h.db.selectFrom('webhook_deliveries').selectAll().orderBy('created_at', 'desc').limit(100).execute(),
   )
-  f.post('/v1/admin/webhooks/:id/test', { preHandler: guard('admin'), schema: { ...tags('Webhooks'), summary: 'Send a test event', params: z.object({ id: z.string() }) } }, async (req) => {
-    const hook = await app.h.db.selectFrom('webhooks').selectAll().where('id', '=', req.params.id).executeTakeFirst()
-    if (!hook) throw new AppError('NOT_FOUND', 'webhook not found', 404)
-    app.bus.publish('connection.update', hook.account_id && hook.account_id !== '*' ? hook.account_id : app.accounts.list()[0]?.id ?? 'test', { test: true, state: 'test' })
-    return { ok: true }
+  f.post('/v1/admin/webhooks/:id/test', { preHandler: guard('admin'), schema: { ...tags('Webhooks'), summary: 'Send a test event to this webhook only', params: z.object({ id: z.string() }) } }, async (req) => {
+    // to this webhook only, whatever its events; the answer of the receiver comes back
+    return app.webhooks.deliverTest(req.params.id, app.accounts.list()[0]?.id ?? 'test')
   })
 
   // ---- OAuth grants & admin sessions

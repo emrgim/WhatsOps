@@ -213,3 +213,4 @@ ul.sent{margin:0;padding-left:18px}ul.sent li{margin:4px 0}
 .rm-cc{width:90px}
 .rm-hookurl{align-items:center;gap:8px;flex-wrap:nowrap}.rm-hookurl code{word-break:break-all;flex:1 1 auto}.rm-hookurl button{flex:0 0 auto;width:auto}
 .rm-crew{margin:0 0 4px 0}
+.hook-auth{gap:8px;align-items:center;flex-wrap:nowrap}.hook-auth input{flex:1 1 auto}.hook-auth button{flex:0 0 auto;width:auto}

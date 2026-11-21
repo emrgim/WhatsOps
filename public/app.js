@@ -992,7 +992,7 @@ $('#dbForm').addEventListener('submit', run(async (e) => {
 async function loadHooks() {
   const [hooks, del] = await Promise.all([api('GET', '/v1/admin/webhooks'), api('GET', '/v1/admin/webhooks/deliveries')])
   $('#hookList').innerHTML = hooks.length
-    ? `<table><tr><th>URL</th><th>${t('th.events')}</th><th>${t('th.number')}</th><th>${t('th.status')}</th><th></th></tr>${hooks.map((h) => `<tr><td><code>${esc(h.url)}</code></td><td>${esc(h.events)}</td><td>${esc(h.account_id === '*' ? t('all') : h.account_id)}</td><td>${esc(t(h.active ? 'hooks.active' : 'hooks.paused'))}</td><td class="actions"><button class="small ghost" data-hook-test="${esc(h.id)}">${esc(t('hooks.test'))}</button><button class="small ghost" data-hook-toggle="${esc(h.id)}" data-active="${h.active}">${esc(t(h.active ? 'hooks.pause' : 'hooks.enable'))}</button><button class="small danger" data-hook-del="${esc(h.id)}">${esc(t('hooks.delete'))}</button></td></tr>`).join('')}</table>`
+    ? `<table><tr><th>URL</th><th>${t('th.events')}</th><th>${t('th.number')}</th><th>${t('th.auth')}</th><th>${t('th.status')}</th><th></th></tr>${hooks.map((h) => `<tr data-hook-row="${esc(h.id)}"><td><code>${esc(h.url)}</code></td><td>${esc(h.events)}</td><td>${esc(h.account_id === '*' ? t('all') : h.account_id)}</td><td class="small">${Object.keys(h.headers || {}).length ? Object.entries(h.headers).map(([k, v]) => `<code>${esc(k)}: ${esc(v)}</code>`).join('<br>') : '<span class="muted">—</span>'}</td><td>${esc(t(h.active ? 'hooks.active' : 'hooks.paused'))}</td><td class="actions"><button class="small ghost" data-hook-test="${esc(h.id)}">${esc(t('hooks.test'))}</button><button class="small ghost" data-hook-auth="${esc(h.id)}" data-has="${Object.keys(h.headers || {}).length ? 1 : 0}">${esc(t('hooks.key'))}</button><button class="small ghost" data-hook-toggle="${esc(h.id)}" data-active="${h.active}">${esc(t(h.active ? 'hooks.pause' : 'hooks.enable'))}</button><button class="small danger" data-hook-del="${esc(h.id)}">${esc(t('hooks.delete'))}</button></td></tr>`).join('')}</table>`
     : `<p class="muted">${esc(t('hooks.none'))}</p>`
   $('#deliveries').innerHTML = del.length
     ? `<table><tr><th>${t('th.when')}</th><th>${t('th.event')}</th><th>${t('th.result')}</th><th>${t('th.attempts')}</th><th>${t('th.http')}</th></tr>${del.slice(0, 30).map((d) => `<tr><td>${fmtDate(d.created_at)}</td><td>${esc(d.event)}</td><td>${esc(d.state)}${d.last_error ? ' · ' + esc(d.last_error) : ''}</td><td>${d.attempts}</td><td>${d.last_status || '—'}</td></tr>`).join('')}</table>`
@@ -1001,14 +1001,41 @@ async function loadHooks() {
 $('#hookForm').addEventListener('submit', run(async (e) => {
   e.preventDefault()
   const f = e.target
-  const h = await api('POST', '/v1/admin/webhooks', { url: f.url.value, events: f.events.value || '*', account: f.account.value })
+  const h = await api('POST', '/v1/admin/webhooks', { url: f.url.value, events: f.events.value || '*', account: f.account.value, ...(f.auth.value.trim() ? { headers: f.auth.value } : {}) })
   $('#newHook').hidden = false
   $('#newHook').innerHTML = `<b>${esc(t('hooks.created'))}</b><code>${esc(h.secret)}</code><button class="small" data-copy="${esc(h.secret)}">${esc(t('copy'))}</button>`
   f.reset()
   await loadHooks()
 }))
+$('#hookList').addEventListener('submit', run(async (e) => {
+  const f = e.target.closest('[data-hook-auth-form]')
+  if (!f) return
+  e.preventDefault()
+  await api('PATCH', `/v1/admin/webhooks/${f.dataset.hookAuthForm}`, { headers: f.auth.value })
+  toast(t('hooks.keySaved'))
+  await loadHooks()
+}))
 $('#hookList').addEventListener('click', run(async (e) => {
-  const tb = e.target.closest('[data-hook-test]'); if (tb) { await api('POST', `/v1/admin/webhooks/${tb.dataset.hookTest}/test`); toast(t('hooks.testSent')); setTimeout(() => loadHooks(), 2500) }
+  const tb = e.target.closest('[data-hook-test]')
+  if (tb) {
+    tb.disabled = true
+    try {
+      const r = await api('POST', `/v1/admin/webhooks/${tb.dataset.hookTest}/test`)
+      if (r.ok) toast(t('hooks.testOk', r.status)); else toast(t('hooks.testFail', r.error || 'HTTP ' + r.status), true)
+    } finally { tb.disabled = false }
+    await loadHooks()
+  }
+  const ka = e.target.closest('[data-hook-auth]')
+  if (ka) {
+    const row = ka.closest('tr')
+    if (row.nextElementSibling?.classList.contains('hook-edit')) { row.nextElementSibling.remove(); return }
+    row.insertAdjacentHTML('afterend', `<tr class="hook-edit"><td colspan="6"><form class="row hook-auth" data-hook-auth-form="${esc(ka.dataset.hookAuth)}">
+      <input name="auth" type="password" autocomplete="new-password" spellcheck="false" placeholder="${esc(t('hooks.authPh'))}" required>
+      <button type="submit" class="small">${esc(t('save'))}</button>${ka.dataset.has === '1' ? `<button type="button" class="small danger" data-hook-auth-del="${esc(ka.dataset.hookAuth)}">${esc(t('hooks.keyRemove'))}</button>` : ''}</form></td></tr>`)
+    row.nextElementSibling.querySelector('input').focus()
+  }
+  const kd = e.target.closest('[data-hook-auth-del]')
+  if (kd && confirm(t('hooks.keyRemoveConfirm'))) { await api('PATCH', `/v1/admin/webhooks/${kd.dataset.hookAuthDel}`, { headers: '' }); toast(t('hooks.keyRemoved')); await loadHooks() }
   const g = e.target.closest('[data-hook-toggle]'); if (g) { await api('PATCH', `/v1/admin/webhooks/${g.dataset.hookToggle}`, { active: g.dataset.active !== '1' }); await loadHooks() }
   const d = e.target.closest('[data-hook-del]'); if (d && confirm(t('confirm.deleteHook'))) { await api('DELETE', `/v1/admin/webhooks/${d.dataset.hookDel}`); await loadHooks() }
 }))
