@@ -95,7 +95,8 @@ function badge(s) { return `<span class="badge ${STATE_CLASS[s] ?? ''}">${esc(t(
 async function loadOverview() {
   state.overview = await api('GET', '/v1/admin/overview')
   state.accounts = state.overview.accounts
-  $('#host').textContent = new URL(state.overview.publicUrl).host + ' · ' + (state.overview.versionLabel || state.overview.version)
+  // only the version: the server's address is not shown in the page (self-hosted, his decision)
+  $('#host').textContent = state.overview.versionLabel || state.overview.version
   $('.subnav[data-for=settings] [data-sub=license]').hidden = !state.overview.license?.enabled
   renderAccounts()
   fillAccountSelects()
@@ -1127,7 +1128,6 @@ function termAppend(e) {
   else { logPending++; $('#logJump').hidden = false; $('#logJump').textContent = t('log.jump', logPending) }
 }
 async function loadLogs() {
-  $('#termHost').textContent = location.host
   const qs = new URLSearchParams({ level: $('#logLevel').value, limit: '1000' })
   const q = $('#logQ').value.trim()
   if (q) qs.set('q', q)
