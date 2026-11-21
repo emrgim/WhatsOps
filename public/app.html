@@ -13,11 +13,11 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="WhatsOps">
-<link id="omTheme" rel="stylesheet" href="/theme.css?v=40">
-<link rel="stylesheet" href="/static/base.css?v=40">
-<link rel="stylesheet" href="/static/app.css?v=40">
-<script src="/static/theme.js?v=40" defer></script>
-<script src="/static/i18n.js?v=40"></script>
+<link id="omTheme" rel="stylesheet" href="/theme.css?v=41">
+<link rel="stylesheet" href="/static/base.css?v=41">
+<link rel="stylesheet" href="/static/app.css?v=41">
+<script src="/static/theme.js?v=41" defer></script>
+<script src="/static/i18n.js?v=41"></script>
 </head>
 <body>
 <header>
@@ -157,34 +157,11 @@
       <div class="seg" role="radiogroup" id="voiceEngines">
         <label><input type="radio" name="engine" value="off"><span data-i18n="voice.e.off"></span></label>
         <label><input type="radio" name="engine" value="local"><span data-i18n="voice.e.local"></span></label>
-        <label><input type="radio" name="engine" value="superwhisper"><span>Superwhisper</span></label>
         <label><input type="radio" name="engine" value="api"><span data-i18n="voice.e.api"></span></label>
         <label><input type="radio" name="engine" value="command"><span data-i18n="voice.e.command"></span></label>
       </div>
-      <p class="small" id="voiceRight"></p>
       <p class="muted small" id="voiceEngineHint"></p>
-      <div data-voice="local"><label><span data-i18n="voice.model"></span> <select name="model"></select></label><p class="small" id="voiceLocal"></p></div>
-      <div data-voice="superwhisper" id="voiceSw">
-        <ol class="sw-steps" id="voiceSwSteps"></ol>
-        <div class="row sw-actions">
-          <a class="linkbtn" id="voiceSwDownload" href="https://superwhisper.com/download" target="_blank" rel="noopener" data-i18n="voice.swDownload"></a>
-          <button type="button" class="ghost" id="voiceSwOpen" data-i18n="voice.swOpen"></button>
-          <button type="button" class="ghost" id="voiceSwSettings" data-i18n="voice.swSettings"></button>
-          <button type="button" class="ghost" id="voiceSwCheck" data-i18n="voice.swCheck"></button>
-        </div>
-        <label><span data-i18n="voice.swFolder"></span> <input name="swFolder" spellcheck="false"></label>
-        <p class="muted small" data-i18n="voice.swFolderHint"></p>
-        <span class="lbl" data-i18n="voice.swText"></span>
-        <div class="seg" role="radiogroup">
-          <label><input type="radio" name="swText" value="raw"><span data-i18n="voice.swRaw"></span></label>
-          <label><input type="radio" name="swText" value="processed"><span data-i18n="voice.swProcessed"></span></label>
-        </div>
-        <p class="muted small" data-i18n="voice.swTextHint"></p>
-      </div>
-      <div class="sw-tip" id="voiceSwTip" hidden>
-        <div><b>Superwhisper</b> <span class="muted small" id="voiceSwNote"></span></div>
-        <a class="linkbtn" href="https://superwhisper.com/download" target="_blank" rel="noopener" data-i18n="voice.swDownload"></a>
-      </div>
+      <div data-voice="local"><label><span data-i18n="voice.model"></span> <select name="model"></select></label><p class="small" id="voiceLocal"></p><div class="row" id="voiceInstallRow" hidden><button type="button" id="voiceInstall" data-i18n="voice.install"></button></div></div>
       <div data-voice="api">
         <div class="row"><label><span data-i18n="voice.provider"></span> <select name="provider"><option value="xai">xAI</option><option value="openai">OpenAI</option><option value="groq">Groq</option><option value="custom" data-i18n="voice.custom"></option></select></label><label><span data-i18n="voice.apiModel"></span> <input name="apiModel" spellcheck="false"></label></div>
         <label><span data-i18n="voice.apiUrl"></span> <input name="apiUrl" spellcheck="false"></label>
@@ -316,6 +293,6 @@
 </dialog>
 
 <div id="toast"></div>
-<script src="/static/app.js?v=40"></script>
+<script src="/static/app.js?v=41"></script>
 </body>
 </html>

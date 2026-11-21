@@ -1,9 +1,9 @@
 /**
  * Voice messages → text, so agents (MCP, API, webhooks) can "listen" to them.
  *
- * Engines (Settings → Voice), the right one depends on the server's system:
- *   - local:        faster-whisper on the server (Python; Linux, macOS, Windows), one resident worker so the model loads once
- *   - superwhisper: the Superwhisper app on the server (macOS, Windows; see superwhisper.ts)
+ * Engines (Settings → Voice):
+ *   - local:   faster-whisper on the server (Linux, macOS, Windows), one resident worker so the model loads once;
+ *              installed in one click inside WhatsOps' own folder (whisper-install.ts), or the server's own Python
  *   - command: any program that prints the text: `{file}` = the audio file, `{lang}` = language or "auto"
  *   - api:     xAI (`/stt`), OpenAI / Groq / any OpenAI-compatible service (`/audio/transcriptions`)
  * Transcripts are stored (table `transcripts`) and never computed twice; new voice notes can be
@@ -18,14 +18,14 @@ import { getContentType, normalizeMessageContent } from '@whiskeysockets/baileys
 import { getSetting, now, setSetting, upsert, type DbHandle } from './db/index.js'
 import type { EventBus, WaEvent } from './events.js'
 import { logger } from './log.js'
-import { Superwhisper, type SwStatus } from './superwhisper.js'
 import { AppError } from './util.js'
+import { WhisperInstaller } from './whisper-install.js'
 import type { WaAccount } from './wa/account.js'
 import type { AccountManager } from './wa/manager.js'
 import type { WaService } from './wa/service.js'
 import { audioInfo, parseMessage, type MessageRow } from './wa/store.js'
 
-export type VoiceEngine = 'off' | 'local' | 'superwhisper' | 'command' | 'api'
+export type VoiceEngine = 'off' | 'local' | 'command' | 'api'
 export type VoiceProvider = 'xai' | 'openai' | 'groq' | 'custom'
 export type VoiceConfig = {
   engine: VoiceEngine
@@ -41,14 +41,10 @@ export type VoiceConfig = {
   language: string
   /** transcribe new incoming voice notes by themselves (false: only when an agent asks) */
   auto: boolean
-  /** Superwhisper's folder when not in the usual place ('' = find it) */
-  swFolder: string
-  /** Superwhisper: the text as said (raw) or after the mode's AI (processed) */
-  swText: 'raw' | 'processed'
 }
 export type VoicePatch = Partial<VoiceConfig>
 
-export const VOICE_ENGINES: VoiceEngine[] = ['off', 'local', 'superwhisper', 'command', 'api']
+export const VOICE_ENGINES: VoiceEngine[] = ['off', 'local', 'command', 'api']
 export const LOCAL_MODELS = ['tiny', 'base', 'small', 'medium', 'large-v3-turbo', 'large-v3']
 export const PROVIDERS: Record<VoiceProvider, { url: string; model: string; path: string }> = {
   xai: { url: 'https://api.x.ai/v1', model: 'grok-voice-transcribe-2.0', path: '/stt' },
@@ -56,7 +52,7 @@ export const PROVIDERS: Record<VoiceProvider, { url: string; model: string; path
   groq: { url: 'https://api.groq.com/openai/v1', model: 'whisper-large-v3-turbo', path: '/audio/transcriptions' },
   custom: { url: '', model: 'whisper-1', path: '/audio/transcriptions' },
 }
-const DEFAULT: VoiceConfig = { engine: 'off', model: 'small', command: '', provider: 'xai', apiUrl: '', apiKey: '', apiModel: '', language: 'auto', auto: true, swFolder: '', swText: 'raw' }
+const DEFAULT: VoiceConfig = { engine: 'off', model: 'small', command: '', provider: 'xai', apiUrl: '', apiKey: '', apiModel: '', language: 'auto', auto: true }
 const CONFIG_KEY = 'voice'
 /** voice notes longer than this are not transcribed by themselves (on request they are) */
 const AUTO_MAX_SECONDS = 15 * 60
@@ -144,7 +140,7 @@ for line in sys.stdin:
 
 type Job = { resolve: (v: { text: string; language: string | null; duration: number | null }) => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
 
-class LocalWorker {
+export class LocalWorker {
   private proc: ChildProcessWithoutNullStreams | null = null
   private ready: Promise<void> | null = null
   private buf = ''
@@ -166,8 +162,8 @@ class LocalWorker {
 
   private start(): Promise<void> {
     const py = this.python()
-    if (!py) return Promise.reject(new AppError('STT_LOCAL_MISSING', 'faster-whisper is not installed on this server (pip install faster-whisper)', 409))
-    const proc = spawn(py, ['-u', this.script()], { stdio: ['pipe', 'pipe', 'pipe'] })
+    if (!py) return Promise.reject(new AppError('STT_LOCAL_MISSING', 'faster-whisper is not installed on this server: Settings → Voice → Install faster-whisper', 409))
+    const proc = spawn(py, ['-u', this.script()], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true, env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', HF_HUB_DISABLE_SYMLINKS_WARNING: '1' } })
     this.proc = proc
     this.buf = ''
     this.lastErr = ''
@@ -297,8 +293,8 @@ export class VoiceService {
   private inflight = new Map<string, Promise<Transcript>>()
   /** one transcription at a time: a CPU model does not get faster in parallel */
   private chain: Promise<unknown> = Promise.resolve()
-  private py: { at: number; exe: string | null; version: string | null } | null = null
-  readonly sw = new Superwhisper()
+  private py: { at: number; exe: string | null; version: string | null; source: 'env' | 'whatsops' | 'system' | null } | null = null
+  readonly installer = new WhisperInstaller()
 
   constructor(
     private h: DbHandle,
@@ -311,7 +307,10 @@ export class VoiceService {
 
   async start(): Promise<void> {
     try {
-      this.cfg = { ...DEFAULT, ...(JSON.parse((await getSetting(this.h, CONFIG_KEY)) || '{}') as Partial<VoiceConfig>) }
+      const saved = JSON.parse((await getSetting(this.h, CONFIG_KEY)) || '{}') as Record<string, unknown>
+      // only the settings that exist today (older versions had more)
+      this.cfg = { ...DEFAULT, ...Object.fromEntries(Object.entries(saved).filter(([k]) => k in DEFAULT)) } as VoiceConfig
+      if (!VOICE_ENGINES.includes(this.cfg.engine)) this.cfg.engine = 'local'
     } catch {
       this.cfg = { ...DEFAULT }
     }
@@ -322,25 +321,26 @@ export class VoiceService {
     return this.cfg
   }
 
-  /** The engine that fits the server's system: Superwhisper on macOS / Windows once installed, else faster-whisper. */
-  recommended(sw: SwStatus): VoiceEngine {
-    return sw.supported && sw.app.installed ? 'superwhisper' : 'local'
-  }
-
-  async publicConfig(fresh = false) {
+  publicConfig() {
     const { apiKey, ...rest } = this.cfg
     const p = PROVIDERS[this.cfg.provider] ?? PROVIDERS.custom
     const local = this.localPython()
-    const sw = await this.sw.status(this.cfg.swFolder, fresh)
     return {
       ...rest,
       platform: process.platform,
-      recommended: this.recommended(sw),
-      superwhisper: sw,
       apiKeySet: !!apiKey,
       apiUrlEffective: this.cfg.apiUrl || p.url,
       apiModelEffective: this.cfg.apiModel || p.model,
-      local: { available: !!local.exe, python: local.exe, version: local.version, model: this.worker.model },
+      local: {
+        available: !!local.exe,
+        python: local.exe,
+        version: local.version,
+        /** whatsops = installed by the button in WhatsOps' folder; system = the server's own Python; env = WA_WHISPER_PYTHON */
+        source: local.source,
+        model: this.worker.model,
+        installable: this.installer.supported,
+        install: this.installer.st,
+      },
       models: LOCAL_MODELS,
       providers: Object.fromEntries(Object.entries(PROVIDERS).map(([k, v]) => [k, { url: v.url, model: v.model }])),
     }
@@ -377,9 +377,6 @@ export class VoiceService {
       next.language = l
     }
     if (p.auto !== undefined) next.auto = !!p.auto
-    if (p.swFolder !== undefined) next.swFolder = String(p.swFolder).trim().slice(0, 500)
-    if (p.swText !== undefined) next.swText = p.swText === 'processed' ? 'processed' : 'raw'
-    if (next.engine === 'superwhisper' && !this.sw.supported) throw new AppError('SW_PLATFORM', 'Superwhisper exists for macOS and Windows: on this server ({0}) use faster-whisper', 409, [process.platform])
     if (next.engine === 'command' && !next.command) throw new AppError('STT_COMMAND', 'Write the command that transcribes the file ({file})', 400)
     if (next.engine === 'command' && !next.command.includes('{file}')) throw new AppError('STT_COMMAND', 'The command must contain {file} where the audio file goes', 400)
     if (next.engine === 'api' && next.provider === 'custom' && !next.apiUrl) throw new AppError('STT_URL', 'Write the address of the transcription service', 400)
@@ -390,19 +387,43 @@ export class VoiceService {
     if (next.engine === 'local' && this.localPython().exe) void this.worker.load(next.model).catch((e) => logger.warn({ mod: 'voice', model: next.model, err: String((e as Error)?.message ?? e).slice(0, 300) }, 'whisper model not loaded'))
   }
 
-  /** Python that can import faster_whisper (checked once every 10 minutes). */
-  localPython(): { exe: string | null; version: string | null } {
+  /** Python that can import faster_whisper (checked once every 10 minutes): WA_WHISPER_PYTHON, WhatsOps' own, the server's. */
+  localPython(): { exe: string | null; version: string | null; source: 'env' | 'whatsops' | 'system' | null } {
     if (this.py && Date.now() - this.py.at < 10 * 60_000) return this.py
-    let found: { exe: string | null; version: string | null } = { exe: null, version: null }
-    for (const exe of [process.env.WA_WHISPER_PYTHON, 'python3', 'python'].filter(Boolean) as string[]) {
-      const r = spawnSync(exe, ['-c', 'import faster_whisper;print(faster_whisper.__version__)'], { encoding: 'utf8', timeout: 20_000 })
+    let found: { exe: string | null; version: string | null; source: 'env' | 'whatsops' | 'system' | null } = { exe: null, version: null, source: null }
+    const tries: [string | null | undefined, 'env' | 'whatsops' | 'system'][] = [
+      [process.env.WA_WHISPER_PYTHON, 'env'],
+      [this.installer.python(), 'whatsops'],
+      ['python3', 'system'],
+      ['python', 'system'],
+    ]
+    for (const [exe, source] of tries) {
+      if (!exe) continue
+      const r = spawnSync(exe, ['-c', 'import faster_whisper;print(faster_whisper.__version__)'], { encoding: 'utf8', timeout: 30_000, windowsHide: true })
       if (r.status === 0) {
-        found = { exe, version: r.stdout.trim() || null }
+        found = { exe, version: r.stdout.trim() || null, source }
         break
       }
     }
     this.py = { at: Date.now(), ...found }
     return found
+  }
+
+  /**
+   * The "Install faster-whisper" button: WhatsOps installs it in its own folder (any system), then switches
+   * the engine to it and downloads the chosen model. Runs in the background; progress in publicConfig().local.install.
+   */
+  installLocal(model?: string): void {
+    if (!this.installer.supported) throw new AppError('STT_INSTALL_PLATFORM', 'faster-whisper has no ready-made package for this system ({0})', 409, [`${process.platform} ${process.arch}`])
+    if (this.installer.st.state === 'running') return
+    void this.installer
+      .install()
+      .then(async () => {
+        this.worker.stop()
+        this.py = null
+        await this.update({ engine: 'local', ...(model ? { model } : {}) })
+      })
+      .catch(() => undefined) // state and log are kept by the installer
   }
 
   // ---------------------------------------------------------------- transcribe
@@ -412,7 +433,6 @@ export class VoiceService {
 
   private engineName(): string {
     if (this.cfg.engine === 'local') return `faster-whisper ${this.cfg.model}`
-    if (this.cfg.engine === 'superwhisper') return 'superwhisper'
     if (this.cfg.engine === 'api') return `${this.cfg.provider} ${this.cfg.apiModel || PROVIDERS[this.cfg.provider].model}`
     return this.cfg.engine === 'command' ? `command ${splitCommand(this.cfg.command)[0] ?? ''}`.trim() : 'off'
   }
@@ -430,10 +450,6 @@ export class VoiceService {
     try {
       if (e === 'local') {
         const r = await this.worker.run(file, this.cfg.model, this.lang(), timeoutMs)
-        return { ...r, text: cleanTranscript(r.text) }
-      }
-      if (e === 'superwhisper') {
-        const r = await this.sw.transcribe(file, seconds, { folder: this.cfg.swFolder, prefer: this.cfg.swText, timeoutMs })
         return { ...r, text: cleanTranscript(r.text) }
       }
       return await this.viaCommand(file, timeoutMs)
@@ -575,12 +591,7 @@ export class VoiceService {
   /** Check the engine; with a voice message stored, transcribe the latest one for real. */
   async test(): Promise<{ ok: boolean; engine: string; sample: { chat: string; seconds: number | null; text: string; ms: number } | null; note?: string }> {
     if (this.cfg.engine === 'off') throw new AppError('STT_OFF', 'Voice transcription is off: choose an engine in Settings → Voice', 409)
-    if (this.cfg.engine === 'local' && !this.localPython().exe) throw new AppError('STT_LOCAL_MISSING', 'faster-whisper is not installed on this server (pip install faster-whisper)', 409)
-    if (this.cfg.engine === 'superwhisper') {
-      const st = await this.sw.status(this.cfg.swFolder, true)
-      if (!st.supported) throw new AppError('SW_PLATFORM', 'Superwhisper exists for macOS and Windows: on this server ({0}) use faster-whisper', 409, [process.platform])
-      if (!st.app.installed) throw new AppError('SW_NO_APP', 'Superwhisper is not installed on this server: download it, install it, then check again', 409)
-    }
+    if (this.cfg.engine === 'local' && !this.localPython().exe) throw new AppError('STT_LOCAL_MISSING', 'faster-whisper is not installed on this server: Settings → Voice → Install faster-whisper', 409)
     const last = await this.latestVoice()
     if (!last) return { ok: true, engine: this.engineName(), sample: null, note: 'no voice message stored yet' }
     const t0 = Date.now()

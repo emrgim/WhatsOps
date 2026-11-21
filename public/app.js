@@ -1245,70 +1245,53 @@ $('#licRemove').addEventListener('click', run(async () => renderLicense(await ap
 // ---------------------------------------------------------------- voice messages → text (Settings → Voice)
 let voiceCfg = null
 let voiceTimer = null
-const OS_NAME = { darwin: 'macOS', win32: 'Windows', linux: 'Linux' }
-function voiceEngineLabel(e) { return e === 'superwhisper' ? 'Superwhisper' : t('voice.e.' + e) }
 function voiceShow() {
   const f = $('#voiceForm')
-  const c = voiceCfg
   const e = f.querySelector('input[name=engine]:checked')?.value || 'off'
   $$('[data-voice]', f).forEach((d) => { d.hidden = d.dataset.voice === 'on' ? e === 'off' : d.dataset.voice !== e })
   $('#voiceEngineHint').textContent = t('voice.eh.' + e)
-  if (c) {
-    const sw = c.superwhisper
-    const os = OS_NAME[c.platform] || c.platform
-    // the engine that fits the server's system
-    $('#voiceRight').innerHTML = esc(t('voice.right', os)).replace('{e}', `<b>${esc(voiceEngineLabel(c.recommended))}</b>`)
-    $$('#voiceEngines label').forEach((l) => {
-      const v = l.querySelector('input').value
-      l.classList.toggle('rec', v === c.recommended)
-      const na = v === 'superwhisper' && !sw.supported
-      l.classList.toggle('na', na)
-      l.querySelector('input').disabled = na
-      l.title = na ? t('voice.swNotHere', os) : ''
-    })
-    // Linux (no Superwhisper there): the suggestion, for his other devices
-    $('#voiceSwTip').hidden = sw.supported
-    $('#voiceSwNote').textContent = t('voice.swNotHere', os)
-    if (sw.supported) voiceSwRender(sw)
-  }
-  const p = c?.providers?.[f.provider.value]
+  const p = voiceCfg?.providers?.[f.provider.value]
   f.apiUrl.placeholder = p?.url || 'https://…/v1'
   f.apiModel.placeholder = p?.model || ''
   const all = f.querySelector('input[name=autoMode]:checked')?.value !== 'asked'
   $('#voiceWhichHint').textContent = t(all ? 'voice.whichAllHint' : 'voice.whichAskedHint')
 }
-function voiceSwRender(sw) {
-  const li = (cls, text, extra = '') => `<li class="${cls}"><span class="mark">${cls === 'ok' ? '✓' : cls === 'no' ? '✗' : 'i'}</span><span>${esc(text)}${extra}</span></li>`
-  const os = OS_NAME[sw.platform] || sw.platform
-  const steps = [
-    sw.app.installed ? li('ok', t('voice.swInstalled', os), sw.app.path ? ` <code>${esc(sw.app.path)}</code>` : '') : li('no', t('voice.swNotInstalled', os)),
-    sw.app.installed ? (sw.app.running ? li('ok', t('voice.swRunning')) : li('no', t('voice.swStopped'))) : '',
-    sw.folder.found ? li('ok', t('voice.swFolderOk', sw.folder.recordings ?? 0), ` <code>${esc(sw.folder.path)}</code>`) : sw.app.installed ? li('no', t('voice.swFolderMissing')) : '',
-    li('info', t('voice.swPro')),
-  ]
-  $('#voiceSwSteps').innerHTML = steps.join('')
-  const dl = $('#voiceSwDownload')
-  dl.href = sw.download || 'https://superwhisper.com/download'
-  dl.hidden = sw.app.installed
-  $('#voiceSwOpen').hidden = !sw.app.installed || sw.app.running
-  $('#voiceSwSettings').hidden = !sw.app.installed || sw.platform !== 'darwin'
-  $('#voiceForm').swFolder.placeholder = sw.folder.custom ? '' : sw.folder.path || (sw.platform === 'win32' ? '%LOCALAPPDATA%\\com.superwhisper.app' : '~/superwhisper')
-}
 function voiceLocalRender(c) {
-  const m = c.local.model
-  let state = ''
-  if (m && m.name === c.model) {
-    if (m.state === 'loading') state = `<br><span class="muted">⏳ ${esc(t('voice.modelLoading', m.name))}</span>`
-    else if (m.state === 'ready') state = `<br><span class="ok-text">✓ ${esc(t('voice.modelReady', m.name))}</span>`
-    else if (m.state === 'error') state = `<br><span class="err-text">${esc(t('voice.modelError', m.name, m.error || ''))}</span>`
+  const L = c.local
+  const ins = L.install || {}
+  const m = L.model
+  let html
+  if (ins.state === 'running') html = `<span class="muted">⏳ ${esc(t('voice.installing', t('voice.step.' + (ins.step || 'uv'))))}</span>`
+  else if (L.available) html = `<span class="ok-text">✓ ${esc(t('voice.localOk', L.version || '', t('voice.src.' + (L.source || 'system'), L.python)))}</span> <span class="muted">${esc(t('voice.localModel'))}</span>`
+  else if (L.installable) html = `<span class="err-text">${esc(t('voice.localMissing'))}</span> <span class="muted">${esc(t('voice.installHint'))}</span>`
+  else html = `<span class="err-text">${esc(t('voice.installNo', c.platform))}</span>`
+  if (ins.state === 'error') html += `<br><span class="err-text">${esc(ins.error || '')}</span>`
+  if (ins.state !== 'running' && m && m.name === c.model) {
+    if (m.state === 'loading') html += `<br><span class="muted">⏳ ${esc(t('voice.modelLoading', m.name))}</span>`
+    else if (m.state === 'ready') html += `<br><span class="ok-text">✓ ${esc(t('voice.modelReady', m.name))}</span>`
+    else if (m.state === 'error') html += `<br><span class="err-text">${esc(t('voice.modelError', m.name, m.error || ''))}</span>`
   }
-  $('#voiceLocal').innerHTML = (c.local.available ? `<span class="ok-text">✓ ${esc(t('voice.localOk', c.local.version || '', c.local.python))}</span> <span class="muted">${esc(t('voice.localModel'))}</span>` : `<span class="err-text">${esc(t('voice.localMissing'))}</span>`) + state
-  // while the model downloads / loads, follow it
+  $('#voiceLocal').innerHTML = html
+  const btn = $('#voiceInstall')
+  $('#voiceInstallRow').hidden = !L.installable || (L.available && ins.state !== 'running')
+  btn.disabled = ins.state === 'running'
+  btn.textContent = t(ins.state === 'error' ? 'voice.installRetry' : 'voice.install')
+  // follow the install and the model download
   clearTimeout(voiceTimer)
-  if (m?.state === 'loading') voiceTimer = setTimeout(() => { if (location.hash.startsWith('#settings/voice')) api('GET', '/v1/admin/voice').then((x) => { voiceCfg = x; voiceLocalRender(x) }).catch(() => {}) }, 3000)
+  if (ins.state === 'running' || m?.state === 'loading') {
+    voiceTimer = setTimeout(async () => {
+      if (!location.hash.startsWith('#settings/voice')) return
+      try {
+        const x = await api('GET', '/v1/admin/voice')
+        if (ins.state === 'running' && x.local.install?.state !== 'running') return loadVoice() // finished: the engine switched to faster-whisper
+        voiceCfg = x
+        voiceLocalRender(x)
+      } catch {}
+    }, 2500)
+  }
 }
-async function loadVoice(fresh) {
-  const c = (voiceCfg = await api('GET', fresh ? '/v1/admin/voice/check' : '/v1/admin/voice'))
+async function loadVoice() {
+  const c = (voiceCfg = await api('GET', '/v1/admin/voice'))
   const f = $('#voiceForm')
   $$('input[name=engine]', f).forEach((r) => { r.checked = r.value === c.engine })
   f.model.innerHTML = c.models.map((m) => `<option value="${esc(m)}">${esc(m)}</option>`).join('')
@@ -1323,8 +1306,6 @@ async function loadVoice(fresh) {
   f.language.value = c.language || 'auto'
   if (!f.language.value) f.language.value = 'auto'
   $$('input[name=autoMode]', f).forEach((r) => { r.checked = r.value === (c.auto ? 'all' : 'asked') })
-  f.swFolder.value = c.swFolder || ''
-  $$('input[name=swText]', f).forEach((r) => { r.checked = r.value === (c.swText || 'raw') })
   voiceLocalRender(c)
   $('#voiceTestOut').textContent = ''
   voiceShow()
@@ -1337,16 +1318,17 @@ $('#voiceForm').addEventListener('submit', run(async (e) => {
   const body = {
     engine, model: f.model.value, provider: f.provider.value, apiUrl: f.apiUrl.value.trim(), apiModel: f.apiModel.value.trim(), command: f.command.value.trim(), language: f.language.value,
     auto: f.querySelector('input[name=autoMode]:checked')?.value !== 'asked',
-    swFolder: f.swFolder.value.trim(), swText: f.querySelector('input[name=swText]:checked')?.value || 'raw',
   }
   if (f.apiKey.value.trim()) body.apiKey = f.apiKey.value.trim()
   await api('PUT', '/v1/admin/voice', body)
   toast(t('saved'))
   await loadVoice()
 }))
-$('#voiceSwCheck').addEventListener('click', run(async () => { await loadVoice(true); toast(t('voice.swChecked')) }))
-$('#voiceSwOpen').addEventListener('click', run(async () => { await api('POST', '/v1/admin/voice/superwhisper/open', { what: 'app' }); setTimeout(() => loadVoice(true).catch(() => {}), 4000) }))
-$('#voiceSwSettings').addEventListener('click', run(async () => { await api('POST', '/v1/admin/voice/superwhisper/open', { what: 'settings' }) }))
+// one click: WhatsOps installs faster-whisper in its own folder, then uses it with the chosen model
+$('#voiceInstall').addEventListener('click', run(async () => {
+  const c = (voiceCfg = await api('POST', '/v1/admin/voice/install', { model: $('#voiceForm').model.value }))
+  voiceLocalRender(c)
+}))
 $('#voiceTest').addEventListener('click', run(async () => {
   const b = $('#voiceTest'), out = $('#voiceTestOut')
   b.disabled = true

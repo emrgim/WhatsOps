@@ -1,0 +1,40 @@
+name: faster-whisper on every system
+
+# The "Install faster-whisper" button of Settings → Voice, for real on each system WhatsOps ships for:
+# install into a fresh folder with its own Python, then transcribe a voice note with WhatsOps' worker.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - src/whisper-install.ts
+      - src/voice.ts
+      - packaging/check-whisper.mjs
+      - .github/workflows/whisper.yml
+
+permissions:
+  contents: read
+
+jobs:
+  whisper:
+    name: ${{ matrix.platform }}-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-15-intel, platform: macos, arch: x64 }
+          - { runner: macos-15, platform: macos, arch: arm64 }
+          - { runner: windows-2022, platform: windows, arch: x64 }
+          - { runner: ubuntu-22.04, platform: linux, arch: x64 }
+          - { runner: ubuntu-22.04-arm, platform: linux, arch: arm64 }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: npm ci --no-audit --no-fund
+      - run: npm run build
+      - name: Install faster-whisper as the button does, then transcribe a voice note
+        run: node packaging/check-whisper.mjs tiny
