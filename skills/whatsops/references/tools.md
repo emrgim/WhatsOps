@@ -2,7 +2,7 @@
 
 <!-- Generated from the MCP server by `npm run skill`: do not edit by hand. -->
 
-31 tools. Scope = what the credential (API key or OAuth grant) needs: `read` or `send` (`admin` includes both). The WhatsApp tools take `account` (phone number or id of one of the owner's numbers; the default number when omitted).
+32 tools. Scope = what the credential (API key or OAuth grant) needs: `read` or `send` (`admin` includes both). The WhatsApp tools take `account` (phone number or id of one of the owner's numbers; the default number when omitted).
 
 ## What the server tells every agent on connect
 
@@ -222,6 +222,8 @@ Send a location pin.
 | `address` | string | no | Address |
 | `account` | string | no | WhatsApp account id or phone number to use. Omit for the default account (see whatsapp_accounts). |
 
+## Statuses (stories)
+
 ### `whatsapp_post_status` — Post status
 
 Scope `send` · changes WhatsApp
@@ -237,6 +239,18 @@ Post a WhatsApp status (story: text, image or video, gone after 24 hours) that O
 | `base64` | string | no | File content as base64 (or data: URL) |
 | `mimetype` | string | no | MIME type, e.g. image/jpeg |
 | `caption` | string | no | Caption |
+| `account` | string | no | WhatsApp account id or phone number to use. Omit for the default account (see whatsapp_accounts). |
+
+### `whatsapp_status_views` — Who saw my statuses
+
+Scope `read` · reads only
+
+My WhatsApp statuses (stories) and who saw them: for each status who opened it and when, and who of its audience did not yet; people = who saw how many of the statuses listed (the whole story). Default: the statuses still visible (last 24 hours). Views are known for statuses posted since WhatsOps keeps them; the phone shows them too.
+
+| Parameter | Type | Required | Meaning |
+|---|---|---|---|
+| `status_id` | string | no | One status only (id from whatsapp_post_status or from this list) |
+| `since` | string | no | Statuses posted since this ISO date (default: the last 24 hours) |
 | `account` | string | no | WhatsApp account id or phone number to use. Omit for the default account (see whatsapp_accounts). |
 
 ## Act on messages and chats

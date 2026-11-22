@@ -83,7 +83,7 @@ Expand-Archive -Force $env:TEMP\whatsops.zip "$HOME\.claude\skills"
 6. **Voice messages** (`audioMessage`): the message carries its `transcript` when it is ready. If it is null, call `whatsapp_transcribe_voice`.
 7. **Media:** `whatsapp_download_media` gives a link valid 1 hour, plus the image itself when it is small. Send files with `url` (http/https) or `base64`.
 8. **Labels** can be changed only on WhatsApp Business numbers. To change a chat's label, remove the old one and add the new one in the same `whatsapp_label_chat` call.
-9. **Statuses** (`whatsapp_post_status`) are seen only by the people in `audience` (people, not groups) and by the owner's own devices, for 24 hours.
+9. **Statuses** (`whatsapp_post_status`) are seen only by the people in `audience` (people, not groups) and by the owner's own devices, for 24 hours. `whatsapp_status_views` tells who opened each one and who did not yet.
 10. **Sending to someone new** can be switched off (`COLD_CONTACT`) or limited to an allowlist (`NOT_ALLOWED`): these are the owner's settings. Tell the user; do not try another way round.
 11. **`whatsops_feedback` becomes a public GitHub issue.** Never put phone numbers, names or message text in it.
 12. Reply to the user in their language.
@@ -103,6 +103,7 @@ Expand-Archive -Force $env:TEMP\whatsops.zip "$HOME\.claude\skills"
 | "Which chats are labelled Follow up?" | `whatsapp_list_labels` `label: "Follow up"` (or `whatsapp_list_chats` `label`) |
 | "Move this chat from Lead to New customer" | `whatsapp_label_chat` `remove: ["Lead"]`, `add: ["New customer"]` |
 | "Post a status only for Anna and Luca" | confirm → `whatsapp_post_status` `audience: ["Anna", "Luca"]`, `type`, `text` or `url` |
+| "Who saw my story?" | `whatsapp_status_views` (`people` = who saw how many of its statuses; each status has `viewers` and `notViewed`) |
 | "Make this chat's messages disappear after a week" | confirm → `whatsapp_set_disappearing` `chat`, `seconds: 604800` |
 | "Is +39… on WhatsApp?" | `whatsapp_check_number` |
 
@@ -147,7 +148,13 @@ Scope `read` = reads only; `send` = changes WhatsApp or another system. The para
 | `whatsapp_send_text` | send | Send a WhatsApp text message as the owner. |
 | `whatsapp_send_media` | send | Send an image, video, audio/voice note, document or sticker from a public URL or base64. |
 | `whatsapp_send_location` | send | Send a location pin. |
+
+**Statuses (stories)**
+
+| Tool | Scope | What it does |
+|---|---|---|
 | `whatsapp_post_status` | send | Post a WhatsApp status (story: text, image or video, gone after 24 hours) that ONLY the people in audience can see, whatever the status privacy set on the phone. |
+| `whatsapp_status_views` | read | My WhatsApp statuses (stories) and who saw them: for each status who opened it and when, and who of its audience did not yet; people = who saw how many of the statuses listed (the whole story). |
 
 **Act on messages and chats**
 
@@ -208,5 +215,5 @@ Scope `read` = reads only; `send` = changes WhatsApp or another system. The para
 ## 8. Beyond MCP
 
 - REST API with the same functions: `https://whatsops.example.com/docs`.
-- Webhooks (**Connectors → Webhooks**) for automations: `message.received`, `message.sent`, `message.transcribed`, `message.update`, `chat.update`, `label.update`, `connection.update`, `history.sync`, `profile.update`. Each body has `context`, one line in plain words that an agent can read as it is.
+- Webhooks (**Connectors → Webhooks**) for automations: `message.received`, `message.sent`, `message.transcribed`, `message.update`, `chat.update`, `label.update`, `status.view`, `connection.update`, `history.sync`, `profile.update`. Each body has `context`, one line in plain words that an agent can read as it is.
 - Live events as SSE: `GET /v1/events`.

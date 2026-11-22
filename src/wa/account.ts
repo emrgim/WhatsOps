@@ -6,6 +6,7 @@ import makeWASocket, {
   type WAVersion,
   type GroupMetadata,
   type WAMessage,
+  type MessageUserReceiptUpdate,
 } from '@whiskeysockets/baileys'
 import NodeCache from 'node-cache'
 import QRCode from 'qrcode'
@@ -17,6 +18,7 @@ import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
 import { attachProbe, captureLocationKey, PROBE_ON, probeActiveShares, probeSubscribe } from './live-location-probe.js'
 import { cleanName, isBuiltInFilter, linkLabel, listLabels, saveLabel } from './labels.js'
+import { recordStatusReceipt, saveStatus, STATUS_JID, statusFromMessage } from './statuses.js'
 import { audioInfo, WaStore } from './store.js'
 
 export type AccountRow = {
@@ -293,6 +295,11 @@ export class WaAccount {
 
         if (events['messages.upsert']) {
           const { messages, type } = events['messages.upsert']
+          // my own statuses (posted here or on another of my devices): kept to tell who saw them
+          for (const m of messages) {
+            const s = statusFromMessage(m)
+            if (s) await saveStatus(this.ctx.h, this.row.id, { ...s, source: 'phone' })
+          }
           if (PROBE_ON) for (const m of messages) void captureLocationKey(sock.signalRepository, m, this.row.id).catch(() => undefined)
           const rows = await this.store.upsertMessages(messages)
           if (this.missingName()) {
@@ -308,6 +315,8 @@ export class WaAccount {
             }
           }
         }
+
+        if (events['message-receipt.update']) await this.onStatusReceipts(events['message-receipt.update'])
 
         if (events['messages.update']) {
           await this.store.applyMessageUpdates(events['messages.update'])
@@ -558,6 +567,35 @@ export class WaAccount {
 
   // ------------------------------------------------------------------ labels
   /** Labels created/changed, and put on or taken off chats and messages (WhatsApp app state). */
+  /**
+   * Somebody got or opened one of my statuses: WhatsApp tells every device of mine (WhatsApp Web shows
+   * the viewers the same way). Kept per person; status.view the first time each one opens it.
+   */
+  private async onStatusReceipts(list: MessageUserReceiptUpdate[]): Promise<void> {
+    const h = this.ctx.h
+    const me = new Set([bareJid(this.row.me_jid), bareJid(this.row.me_lid)].filter(Boolean))
+    for (const u of list) {
+      if (u.key?.remoteJid !== STATUS_JID || !u.key.id || !u.receipt?.userJid) continue
+      const viewer = bareJid(u.receipt.userJid)
+      if (!viewer || me.has(viewer)) continue
+      const read = Number(u.receipt.readTimestamp ?? u.receipt.playedTimestamp ?? 0)
+      const got = Number(u.receipt.receiptTimestamp ?? 0)
+      const r = await recordStatusReceipt(h, this.row.id, { statusId: u.key.id, viewer, viewedAt: read ? read * 1000 : undefined, deliveredAt: got ? got * 1000 : undefined })
+      if (r !== 'viewed') continue
+      const s = await h.db.selectFrom('statuses').select(['type', 'text']).where('account_id', '=', this.row.id).where('id', '=', u.key.id).executeTakeFirst()
+      const jid = this.store.canonical(viewer)
+      this.ctx.bus.publish('status.view', this.row.id, {
+        statusId: u.key.id,
+        viewer: jid,
+        viewerName: await this.store.nameOf(jid),
+        viewerPhone: this.store.phoneOf(jid),
+        viewedAt: new Date(read * 1000).toISOString(),
+        statusType: (s?.type as string | null) ?? null,
+        statusText: (s?.text as string | null) ?? null,
+      })
+    }
+  }
+
   private async onLabels(events: { 'labels.edit'?: unknown; 'labels.association'?: unknown }, quiet: boolean): Promise<void> {
     type Edit = { id?: string; name?: string | null; color?: number | null; deleted?: boolean | null; predefinedId?: string | null }
     type Assoc = { type?: 'add' | 'remove'; association?: { type?: string; chatId?: string; labelId?: string; messageId?: string } }

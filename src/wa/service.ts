@@ -8,6 +8,7 @@ import { AppError, bareJid, digits, isGroupJid, toJid, userOf } from '../util.js
 import type { WaAccount } from './account.js'
 import type { AccountManager } from './manager.js'
 import { labelLinks, listLabels, pickLabel, type Label } from './labels.js'
+import { loadStatuses, saveStatus, STATUS_LIFE_MS } from './statuses.js'
 import { parseMessage, type MessageRow } from './store.js'
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
@@ -434,7 +435,70 @@ export class WaService {
     const me = acc.requireOpen().user?.id
     const statusJidList = [...audience, ...(me ? [jidNormalizedUser(me)] : [])]
     const msg = await acc.sendRaw('status@broadcast', content, { broadcast: true, statusJidList })
-    return { id: msg.key.id!, audience, type: i.type, timestamp: new Date().toISOString(), status: 'sent' }
+    const at = Date.now()
+    await saveStatus(this.h, acc.id, { id: msg.key.id!, ts: at, type: i.type, text: (i.type === 'text' ? i.text : i.caption) || null, audience, source: 'whatsops' })
+    return { id: msg.key.id!, audience, type: i.type, timestamp: new Date(at).toISOString(), status: 'sent' }
+  }
+
+  /**
+   * My statuses (default: the ones still visible, last 24 hours) with who opened each and, when the
+   * audience is known, who did not yet; `people` = who saw how many of them (the whole story).
+   */
+  async statusViews(acc: WaAccount, q: { statusId?: string; since?: string }) {
+    let since: number | undefined
+    if (q.since) {
+      since = Date.parse(q.since)
+      if (!Number.isFinite(since)) throw new AppError('INVALID_INPUT', 'since must be an ISO date', 400)
+    }
+    const { statuses, views } = await loadStatuses(this.h, acc.id, { id: q.statusId?.trim() || undefined, since })
+    if (q.statusId && !statuses.length) throw new AppError('STATUS_NOT_FOUND', 'No status {0} of this number', 404, [q.statusId])
+    const st = acc.store
+    const person = async (jid: string) => ({ jid, name: await st.nameOf(jid), phone: st.phoneOf(jid) })
+    const iso = (ms: number | null | undefined) => (ms ? new Date(Number(ms)).toISOString() : null)
+    const people = new Map<string, { jid: string; name: string | null; phone: string | null; saw: number; of: number; last: number }>()
+    const out = []
+    for (const s of statuses) {
+      const audience = s.audience ? (JSON.parse(s.audience) as string[]).map((j) => st.canonical(j)) : null
+      // one person can answer under the phone number and under the LID: the first opening counts
+      const seen = new Map<string, number>()
+      for (const v of views) {
+        if (v.status_id !== s.id || !v.viewed_at) continue
+        const jid = st.canonical(v.viewer)
+        const at = Number(v.viewed_at)
+        if (!seen.has(jid) || at < seen.get(jid)!) seen.set(jid, at)
+      }
+      const viewers = []
+      for (const [jid, at] of [...seen].sort((a, b) => a[1] - b[1])) {
+        viewers.push({ ...(await person(jid)), viewedAt: iso(at) })
+        const p = people.get(jid) ?? { ...(await person(jid)), saw: 0, of: 0, last: 0 }
+        p.saw++
+        p.last = Math.max(p.last, at)
+        people.set(jid, p)
+      }
+      const notViewed = audience ? await Promise.all([...new Set(audience)].filter((j) => !seen.has(j)).map(person)) : null
+      const ts = Number(s.ts ?? 0)
+      out.push({
+        id: s.id,
+        postedAt: iso(ts),
+        type: s.type,
+        text: s.text && s.text.length > 300 ? `${s.text.slice(0, 300)}…` : s.text,
+        postedFrom: s.source,
+        active: !!ts && Date.now() - ts < STATUS_LIFE_MS && !Number(s.deleted),
+        audience: audience ? new Set(audience).size : null,
+        views: viewers.length,
+        viewers,
+        notViewed,
+        _audience: audience,
+      })
+    }
+    // how many of the listed statuses each viewer could see (all, when the audience is unknown)
+    for (const p of people.values()) p.of = out.filter((s) => !s._audience || s._audience.includes(p.jid)).length
+    return {
+      statuses: out.map(({ _audience, ...s }) => s),
+      people: [...people.values()]
+        .sort((a, b) => b.saw - a.saw || b.last - a.last)
+        .map((p) => ({ jid: p.jid, name: p.name, phone: p.phone, saw: p.saw, of: p.of, lastViewedAt: iso(p.last) })),
+    }
   }
 
   async sendLocation(acc: WaAccount, i: { to: string; latitude: number; longitude: number; name?: string; address?: string }) {

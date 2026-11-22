@@ -408,6 +408,20 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   )
 
   tool(
+    'whatsapp_status_views',
+    'Who saw my statuses',
+    'My WhatsApp statuses (stories) and who saw them: for each status who opened it and when, and who of its audience did not yet; people = who saw how many of the statuses listed (the whole story). Default: the statuses still visible (last 24 hours). Views are known for statuses posted since WhatsOps keeps them; the phone shows them too.',
+    'read',
+    {
+      status_id: z.string().optional().describe(L('One status only (id from whatsapp_post_status or from this list)')),
+      since: z.string().optional().describe(L('Statuses posted since this ISO date (default: the last 24 hours)')),
+      account,
+    },
+    { readOnlyHint: true },
+    async (a) => app.svc.statusViews(acc(a.account), { statusId: a.status_id, since: a.since }),
+  )
+
+  tool(
     'whatsapp_send_location',
     'Send location',
     'Send a location pin.',

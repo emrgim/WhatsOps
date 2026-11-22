@@ -524,6 +524,21 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     async (req) => app.svc.sendMedia(accountFor(app, P(req), req.body.account), req.body),
   )
 
+  f.get(
+    '/v1/status',
+    {
+      preHandler: guard('read'),
+      schema: { ...tags('Messages'), summary: 'My statuses (stories) and who saw them', querystring: z.object({ since: z.string().optional(), account: acct }) },
+    },
+    async (req) => app.svc.statusViews(accountFor(app, P(req), req.query.account), { since: req.query.since }),
+  )
+
+  f.get(
+    '/v1/status/:id',
+    { preHandler: guard('read'), schema: { ...tags('Messages'), summary: 'Who saw one of my statuses, and who did not yet', params: z.object({ id: z.string() }), querystring: z.object({ account: acct }) } },
+    async (req) => app.svc.statusViews(accountFor(app, P(req), req.query.account), { statusId: req.params.id }),
+  )
+
   f.post(
     '/v1/status',
     {

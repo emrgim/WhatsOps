@@ -273,6 +273,18 @@ export const TABLES: TableDef[] = [
     cols: [['account_id', 'id', 'notnull'], ['label_id', 'short', 'notnull'], ['chat_jid', 'key', 'notnull'], ['msg_id', 'key', 'notnull'], ['updated_at', 'big']],
     pk: ['account_id', 'label_id', 'chat_jid', 'msg_id'],
   },
+  // my statuses (stories) and who got / opened each of them (src/wa/statuses.ts)
+  {
+    name: 'statuses',
+    cols: [['account_id', 'id', 'notnull'], ['id', 'key', 'notnull'], ['ts', 'big'], ['type', 'short'], ['text', 'long'], ['audience', 'long'], ['source', 'short'], ['deleted', 'int']],
+    pk: ['account_id', 'id'],
+    indexes: [['statuses_ts', ['account_id', 'ts']]],
+  },
+  {
+    name: 'status_views',
+    cols: [['account_id', 'id', 'notnull'], ['status_id', 'key', 'notnull'], ['viewer', 'key', 'notnull'], ['delivered_at', 'big'], ['viewed_at', 'big']],
+    pk: ['account_id', 'status_id', 'viewer'],
+  },
   {
     name: 'admin_sessions',
     cols: [['id_hash', 'key', 'notnull'], ['label', 'name'], ['created_at', 'big'], ['expires_at', 'big'], ['last_seen', 'big'], ['user_id', 'id']],

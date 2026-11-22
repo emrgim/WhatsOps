@@ -1,4 +1,8 @@
-import { describe, expect, it } from 'vitest'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { migrate, openDb, type DbHandle } from '../src/db/index.js'
 import { WaService } from '../src/wa/service.js'
 
 const settings = { get: () => ({ sendAllowlist: '', allowColdContacts: true, maxMediaMb: 16 }) }
@@ -16,7 +20,18 @@ function fakeAccount() {
   }
   return { acc, calls }
 }
-const svc = new WaService(null as never, null as never, settings as never)
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wo-status-'))
+let h: DbHandle
+let svc: WaService
+beforeAll(async () => {
+  h = await openDb(`sqlite://${path.join(tmp, 'wa.db')}`)
+  await migrate(h)
+  svc = new WaService(h, null as never, settings as never)
+})
+afterAll(async () => {
+  await h.close()
+  fs.rmSync(tmp, { recursive: true, force: true })
+})
 const PNG = 'data:image/png;base64,' + Buffer.from('fake-png').toString('base64')
 
 describe('status (stories) with a chosen audience', () => {
@@ -29,6 +44,10 @@ describe('status (stories) with a chosen audience', () => {
     expect(calls[0].content).toMatchObject({ caption: 'ciao', mimetype: 'image/png' })
     expect(Buffer.isBuffer(calls[0].content.image)).toBe(true)
     expect(calls[0].opts).toEqual({ broadcast: true, statusJidList: ['393330000000@s.whatsapp.net', '971500000001@s.whatsapp.net'] })
+    // kept, so that its views can be told later
+    const row = await h.db.selectFrom('statuses').selectAll().where('id', '=', 'STATUS1').executeTakeFirstOrThrow()
+    expect(row).toMatchObject({ account_id: '971500000001', type: 'image', text: 'ciao', source: 'whatsops' })
+    expect(JSON.parse(String(row.audience))).toEqual(['393330000000@s.whatsapp.net'])
   })
 
   it('a text status', async () => {
