@@ -282,7 +282,7 @@ export const TABLES: TableDef[] = [
   },
   {
     name: 'status_views',
-    cols: [['account_id', 'id', 'notnull'], ['status_id', 'key', 'notnull'], ['viewer', 'key', 'notnull'], ['delivered_at', 'big'], ['viewed_at', 'big']],
+    cols: [['account_id', 'id', 'notnull'], ['status_id', 'key', 'notnull'], ['viewer', 'key', 'notnull'], ['delivered_at', 'big'], ['viewed_at', 'big'], ['reaction', 'short'], ['reacted_at', 'big']],
     pk: ['account_id', 'status_id', 'viewer'],
   },
   {

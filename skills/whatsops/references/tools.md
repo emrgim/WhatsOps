@@ -241,11 +241,11 @@ Post a WhatsApp status (story: text, image or video, gone after 24 hours) that O
 | `caption` | string | no | Caption |
 | `account` | string | no | WhatsApp account id or phone number to use. Omit for the default account (see whatsapp_accounts). |
 
-### `whatsapp_status_views` — Who saw my statuses
+### `whatsapp_status_views` — Who saw and liked my statuses
 
 Scope `read` · reads only
 
-My WhatsApp statuses (stories) and who saw them: for each status who opened it and when, and who of its audience did not yet; people = who saw how many of the statuses listed (the whole story). Default: the statuses still visible (last 24 hours). Views are known for statuses posted since WhatsOps keeps them; the phone shows them too.
+My WhatsApp statuses (stories) and who saw and liked them: for each status who opened it and when, who liked it (likedBy: the contact and the emoji), the replies it got (an emoji or a text sent from the status) and who of its audience did not open it yet; people = who saw and liked how many of the statuses listed (the whole story). Default: the statuses still visible (last 24 hours). Views and likes are known for statuses posted since WhatsOps keeps them; the phone shows them too.
 
 | Parameter | Type | Required | Meaning |
 |---|---|---|---|

@@ -7,6 +7,7 @@ import makeWASocket, {
   type GroupMetadata,
   type WAMessage,
   type MessageUserReceiptUpdate,
+  normalizeMessageContent,
 } from '@whiskeysockets/baileys'
 import NodeCache from 'node-cache'
 import QRCode from 'qrcode'
@@ -18,8 +19,11 @@ import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
 import { attachProbe, captureLocationKey, PROBE_ON, probeActiveShares, probeSubscribe } from './live-location-probe.js'
 import { cleanName, isBuiltInFilter, linkLabel, listLabels, saveLabel } from './labels.js'
-import { recordStatusReceipt, saveStatus, STATUS_JID, statusFromMessage } from './statuses.js'
+import { recordStatusReaction, recordStatusReceipt, saveStatus, STATUS_JID, statusFromMessage, statusReactionFromMessage } from './statuses.js'
 import { audioInfo, WaStore } from './store.js'
+
+// what statuses of others normally carry (not logged)
+const COMMON_STATUS_PARTS = new Set(['imageMessage', 'videoMessage', 'extendedTextMessage', 'conversation', 'audioMessage', 'stickerMessage', 'reactionMessage', 'protocolMessage', 'senderKeyDistributionMessage', 'messageContextInfo'])
 
 export type AccountRow = {
   id: string
@@ -299,6 +303,13 @@ export class WaAccount {
           for (const m of messages) {
             const s = statusFromMessage(m)
             if (s) await saveStatus(this.ctx.h, this.row.id, { ...s, source: 'phone' })
+            const like = statusReactionFromMessage(m)
+            if (like) await this.onStatusLike(like)
+            else if (m.key.remoteJid === STATUS_JID && !m.key.fromMe) {
+              // statuses of others are not kept; an unusual kind is logged (kind only) to learn new status features
+              const kind = m.message ? Object.keys(normalizeMessageContent(m.message) ?? {}).find((x) => !COMMON_STATUS_PARTS.has(x)) : undefined
+              if (kind) logger.info({ account: this.row.id, kind }, 'status message of another kind')
+            }
           }
           if (PROBE_ON) for (const m of messages) void captureLocationKey(sock.signalRepository, m, this.row.id).catch(() => undefined)
           const rows = await this.store.upsertMessages(messages)
@@ -594,6 +605,27 @@ export class WaAccount {
         statusText: (s?.text as string | null) ?? null,
       })
     }
+  }
+
+  /** Somebody liked one of my statuses, or took the like back: kept with who it was, and status.like. */
+  private async onStatusLike(l: { statusId: string; who: string; whoAlt: string | null; emoji: string; at: number }): Promise<void> {
+    const h = this.ctx.h
+    const who = this.store.canonical(l.who, l.whoAlt)
+    const r = await recordStatusReaction(h, this.row.id, { statusId: l.statusId, who, emoji: l.emoji, at: l.at })
+    if (!r) return
+    const s = await h.db.selectFrom('statuses').select(['type', 'text']).where('account_id', '=', this.row.id).where('id', '=', l.statusId).executeTakeFirst()
+    logger.info({ account: this.row.id, status: l.statusId, removed: r === 'unliked' }, 'status like')
+    this.ctx.bus.publish('status.like', this.row.id, {
+      statusId: l.statusId,
+      liker: who,
+      likerName: await this.store.nameOf(who),
+      likerPhone: this.store.phoneOf(who),
+      emoji: l.emoji || null,
+      removed: r === 'unliked',
+      likedAt: new Date(l.at).toISOString(),
+      statusType: (s?.type as string | null) ?? null,
+      statusText: (s?.text as string | null) ?? null,
+    })
   }
 
   private async onLabels(events: { 'labels.edit'?: unknown; 'labels.association'?: unknown }, quiet: boolean): Promise<void> {

@@ -25,7 +25,7 @@ export class EventBus extends EventEmitter {
   }
 }
 
-export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.transcribed', 'message.update', 'connection.update', 'history.sync', 'chat.update', 'label.update', 'status.view', 'profile.update'] as const
+export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.transcribed', 'message.update', 'connection.update', 'history.sync', 'chat.update', 'label.update', 'status.view', 'status.like', 'profile.update'] as const
 
 const RETRY_DELAYS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 12 * 3600_000]
 
@@ -134,6 +134,13 @@ export function describeEvent(ev: Pick<WaEvent, 'type' | 'account' | 'data'>): s
     const who = [v?.viewerName, v?.viewerPhone].filter(Boolean).join(' ') || v?.viewer || 'unknown'
     const text = v?.statusText ? `: ${v.statusText.length > 200 ? `${v.statusText.slice(0, 200)}…` : v.statusText}` : ''
     return `Status seen on ${on} by ${who} (${v?.statusType ?? 'status'}${text})`
+  }
+  if (ev.type === 'status.like') {
+    const v = ev.data as { likerName?: string | null; likerPhone?: string | null; liker?: string; emoji?: string | null; removed?: boolean; statusType?: string | null; statusText?: string | null } | undefined
+    const who = [v?.likerName, v?.likerPhone].filter(Boolean).join(' ') || v?.liker || 'unknown'
+    const text = v?.statusText ? `: ${v.statusText.length > 200 ? `${v.statusText.slice(0, 200)}…` : v.statusText}` : ''
+    const what = `(${v?.statusType ?? 'status'}${text})`
+    return v?.removed ? `Like taken back on ${on} by ${who} ${what}` : `Status liked (${v?.emoji ?? '❤️'}) on ${on} by ${who} ${what}`
   }
   if (ev.type === 'webhook.test') return `Test event from WhatsOps (${on}): the webhook works.`
   if (ev.type === 'connection.update') return `WhatsApp number ${on}: connection ${d.state ?? 'changed'}`

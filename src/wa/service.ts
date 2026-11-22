@@ -8,7 +8,7 @@ import { AppError, bareJid, digits, isGroupJid, toJid, userOf } from '../util.js
 import type { WaAccount } from './account.js'
 import type { AccountManager } from './manager.js'
 import { labelLinks, listLabels, pickLabel, type Label } from './labels.js'
-import { loadStatuses, saveStatus, STATUS_LIFE_MS } from './statuses.js'
+import { loadStatuses, saveStatus, STATUS_LIFE_MS, statusReplyOf } from './statuses.js'
 import { parseMessage, type MessageRow } from './store.js'
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
@@ -441,8 +441,9 @@ export class WaService {
   }
 
   /**
-   * My statuses (default: the ones still visible, last 24 hours) with who opened each and, when the
-   * audience is known, who did not yet; `people` = who saw how many of them (the whole story).
+   * My statuses (default: the ones still visible, last 24 hours) with who opened and who liked each,
+   * the replies they got and, when the audience is known, who did not open them yet; `people` = who saw
+   * and liked how many of them (the whole story).
    */
   async statusViews(acc: WaAccount, q: { statusId?: string; since?: string }) {
     let since: number | undefined
@@ -453,27 +454,66 @@ export class WaService {
     const { statuses, views } = await loadStatuses(this.h, acc.id, { id: q.statusId?.trim() || undefined, since })
     if (q.statusId && !statuses.length) throw new AppError('STATUS_NOT_FOUND', 'No status {0} of this number', 404, [q.statusId])
     const st = acc.store
-    const person = async (jid: string) => ({ jid, name: await st.nameOf(jid), phone: st.phoneOf(jid) })
+    const known = new Map<string, { jid: string; name: string | null; phone: string | null }>()
+    const person = async (jid: string) => {
+      if (!known.has(jid)) known.set(jid, { jid, name: await st.nameOf(jid), phone: st.phoneOf(jid) })
+      return { ...known.get(jid)! }
+    }
     const iso = (ms: number | null | undefined) => (ms ? new Date(Number(ms)).toISOString() : null)
-    const people = new Map<string, { jid: string; name: string | null; phone: string | null; saw: number; of: number; last: number }>()
+
+    // replies (an emoji or a text sent from the status) arrive in the chat with that person, quoting the status
+    const ids = new Set(statuses.map((x) => x.id))
+    const replies = new Map<string, { jid: string; name: string | null; phone: string | null; text: string | null; at: string | null; messageId: string }[]>()
+    if (statuses.length) {
+      const from = Math.floor(Math.min(...statuses.map((x) => Number(x.ts) || Date.now())) / 1000) - 60
+      const rows = await this.h.db
+        .selectFrom('messages')
+        .select(['chat_jid', 'id', 'sender', 'ts', 'type', 'text', 'raw'])
+        .where('account_id', '=', acc.id)
+        .where('from_me', '=', 0)
+        .where('ts', '>=', from)
+        .where('raw', 'like', '%status@broadcast%')
+        .orderBy('ts')
+        .execute()
+      for (const r of rows as { chat_jid: string; id: string; sender: string | null; ts: number; type: string; text: string | null; raw: string }[]) {
+        const sid = statusReplyOf(r.raw)
+        if (!sid || !ids.has(sid)) continue
+        const list = replies.get(sid) ?? []
+        list.push({ ...(await person(st.canonical(r.sender || r.chat_jid))), text: r.text ?? r.type, at: iso(Number(r.ts) * 1000), messageId: r.id })
+        replies.set(sid, list)
+      }
+    }
+
+    const people = new Map<string, { jid: string; name: string | null; phone: string | null; saw: number; of: number; liked: number; last: number }>()
     const out = []
     for (const s of statuses) {
       const audience = s.audience ? (JSON.parse(s.audience) as string[]).map((j) => st.canonical(j)) : null
-      // one person can answer under the phone number and under the LID: the first opening counts
-      const seen = new Map<string, number>()
+      // one person can answer under the phone number and under the LID: the first opening and the last like count
+      const seen = new Map<string, { viewedAt: number | null; liked: string | null; likedAt: number | null }>()
       for (const v of views) {
-        if (v.status_id !== s.id || !v.viewed_at) continue
+        if (v.status_id !== s.id || (!v.viewed_at && !v.reaction)) continue
         const jid = st.canonical(v.viewer)
-        const at = Number(v.viewed_at)
-        if (!seen.has(jid) || at < seen.get(jid)!) seen.set(jid, at)
+        const e = seen.get(jid) ?? { viewedAt: null, liked: null, likedAt: null }
+        if (v.viewed_at && (!e.viewedAt || Number(v.viewed_at) < e.viewedAt)) e.viewedAt = Number(v.viewed_at)
+        if (v.reaction && (!e.likedAt || Number(v.reacted_at) > e.likedAt)) {
+          e.liked = v.reaction
+          e.likedAt = Number(v.reacted_at) || null
+        }
+        seen.set(jid, e)
       }
+      const order = [...seen].sort((a, b) => (a[1].viewedAt ?? a[1].likedAt ?? 0) - (b[1].viewedAt ?? b[1].likedAt ?? 0))
       const viewers = []
-      for (const [jid, at] of [...seen].sort((a, b) => a[1] - b[1])) {
-        viewers.push({ ...(await person(jid)), viewedAt: iso(at) })
-        const p = people.get(jid) ?? { ...(await person(jid)), saw: 0, of: 0, last: 0 }
+      for (const [jid, e] of order) {
+        viewers.push({ ...(await person(jid)), viewedAt: iso(e.viewedAt), liked: e.liked, likedAt: iso(e.likedAt) })
+        const p = people.get(jid) ?? { ...(await person(jid)), saw: 0, of: 0, liked: 0, last: 0 }
         p.saw++
-        p.last = Math.max(p.last, at)
+        if (e.liked) p.liked++
+        p.last = Math.max(p.last, e.viewedAt ?? e.likedAt ?? 0)
         people.set(jid, p)
+      }
+      const likedBy = []
+      for (const [jid, e] of order.filter(([, e]) => e.liked).sort((a, b) => (a[1].likedAt ?? 0) - (b[1].likedAt ?? 0))) {
+        likedBy.push({ ...(await person(jid)), emoji: e.liked, likedAt: iso(e.likedAt) })
       }
       const notViewed = audience ? await Promise.all([...new Set(audience)].filter((j) => !seen.has(j)).map(person)) : null
       const ts = Number(s.ts ?? 0)
@@ -486,7 +526,10 @@ export class WaService {
         active: !!ts && Date.now() - ts < STATUS_LIFE_MS && !Number(s.deleted),
         audience: audience ? new Set(audience).size : null,
         views: viewers.length,
+        likes: likedBy.length,
         viewers,
+        likedBy,
+        replies: replies.get(s.id) ?? [],
         notViewed,
         _audience: audience,
       })
@@ -496,8 +539,8 @@ export class WaService {
     return {
       statuses: out.map(({ _audience, ...s }) => s),
       people: [...people.values()]
-        .sort((a, b) => b.saw - a.saw || b.last - a.last)
-        .map((p) => ({ jid: p.jid, name: p.name, phone: p.phone, saw: p.saw, of: p.of, lastViewedAt: iso(p.last) })),
+        .sort((a, b) => b.saw - a.saw || b.liked - a.liked || b.last - a.last)
+        .map((p) => ({ jid: p.jid, name: p.name, phone: p.phone, saw: p.saw, of: p.of, liked: p.liked, lastViewedAt: iso(p.last) })),
     }
   }
 

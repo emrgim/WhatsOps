@@ -4,7 +4,7 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { migrate, openDb, type DbHandle } from '../src/db/index.js'
 import { describeEvent } from '../src/events.js'
-import { recordStatusReceipt, saveStatus, statusFromMessage } from '../src/wa/statuses.js'
+import { recordStatusReaction, recordStatusReceipt, saveStatus, statusFromMessage, statusReactionFromMessage, statusReplyOf } from '../src/wa/statuses.js'
 import { WaService } from '../src/wa/service.js'
 
 const A = '971500000001'
@@ -81,14 +81,14 @@ describe('who saw my statuses', () => {
     expect(s1).toMatchObject({ type: 'image', text: 'Ciao a tutti', active: true, audience: 3, views: 2 })
     // Mario saw it under his LID: counted as Mario, with his name and number
     expect(s1.viewers).toEqual([
-      { jid: MARIO, name: 'Mario', phone: '+393330000001', viewedAt: new Date(t0 + 60_000).toISOString() },
-      { jid: LUCA, name: 'Luca', phone: '+393330000002', viewedAt: new Date(t0 + HOUR).toISOString() },
+      { jid: MARIO, name: 'Mario', phone: '+393330000001', viewedAt: new Date(t0 + 60_000).toISOString(), liked: null, likedAt: null },
+      { jid: LUCA, name: 'Luca', phone: '+393330000002', viewedAt: new Date(t0 + HOUR).toISOString(), liked: null, likedAt: null },
     ])
     expect(s1.notViewed).toEqual([{ jid: ANNA, name: 'Anna', phone: '+393330000003' }])
     // over the whole story: who saw how many of its statuses
     expect(r.people).toEqual([
-      { jid: MARIO, name: 'Mario', phone: '+393330000001', saw: 2, of: 2, lastViewedAt: new Date(t0 + 2 * HOUR - 1000).toISOString() },
-      { jid: LUCA, name: 'Luca', phone: '+393330000002', saw: 1, of: 2, lastViewedAt: new Date(t0 + HOUR).toISOString() },
+      { jid: MARIO, name: 'Mario', phone: '+393330000001', saw: 2, of: 2, liked: 0, lastViewedAt: new Date(t0 + 2 * HOUR - 1000).toISOString() },
+      { jid: LUCA, name: 'Luca', phone: '+393330000002', saw: 1, of: 2, liked: 0, lastViewedAt: new Date(t0 + HOUR).toISOString() },
     ])
 
     const old = await svc.statusViews(acc as never, { since: new Date(Date.now() - 48 * HOUR).toISOString() })
@@ -105,8 +105,52 @@ describe('who saw my statuses', () => {
     expect(r.statuses.map((s) => s.id)).toEqual(['S1'])
   })
 
+  it('a like on my status is read out of the message WhatsApp sends to status@broadcast', () => {
+    const like = { key: { remoteJid: 'status@broadcast', fromMe: false, id: 'R1', participant: MARIO_LID, participantAlt: MARIO }, messageTimestamp: 1_800_000_000, message: { reactionMessage: { key: { remoteJid: 'status@broadcast', fromMe: true, id: 'S1', participant: ME }, text: '💚', senderTimestampMs: 1_800_000_000_123 } } }
+    expect(statusReactionFromMessage(like as never)).toEqual({ statusId: 'S1', who: MARIO_LID, whoAlt: MARIO, emoji: '💚', at: 1_800_000_000_123 })
+    const unlike = { ...like, message: { reactionMessage: { ...like.message.reactionMessage, text: '' } } }
+    expect(statusReactionFromMessage(unlike as never)).toMatchObject({ statusId: 'S1', emoji: '' })
+    // mine, or a reaction in a normal chat: not a like on a status
+    expect(statusReactionFromMessage({ ...like, key: { ...like.key, fromMe: true } } as never)).toBeNull()
+    expect(statusReactionFromMessage({ ...like, key: { ...like.key, remoteJid: MARIO } } as never)).toBeNull()
+  })
+
+  it('a reply to my status (an emoji or a text sent in the chat) points at the status', () => {
+    const raw = { key: { remoteJid: MARIO, fromMe: false, id: 'M1' }, message: { extendedTextMessage: { text: '💯', contextInfo: { stanzaId: 'S1', participant: ME, remoteJid: 'status@broadcast' } } } }
+    expect(statusReplyOf(JSON.stringify(raw))).toBe('S1')
+    const normalReply = { ...raw, message: { extendedTextMessage: { text: 'ok', contextInfo: { stanzaId: 'X', participant: ME } } } }
+    expect(statusReplyOf(JSON.stringify(normalReply))).toBeNull()
+    expect(statusReplyOf('not json')).toBeNull()
+  })
+
+  it('likes are kept with who gave them; taking the like back removes it; only my statuses count', async () => {
+    expect(await recordStatusReaction(h, A, { statusId: 'S1', who: ANNA, emoji: '💚', at: t0 + 90_000 })).toBe('liked')
+    expect(await recordStatusReaction(h, A, { statusId: 'S1', who: ANNA, emoji: '💚', at: t0 + 90_000 })).toBeNull()
+    expect(await recordStatusReaction(h, A, { statusId: 'S1', who: LUCA, emoji: '❤️', at: t0 + HOUR + 1000 })).toBe('liked')
+    expect(await recordStatusReaction(h, A, { statusId: 'S1', who: LUCA, emoji: '', at: t0 + HOUR + 2000 })).toBe('unliked')
+    expect(await recordStatusReaction(h, A, { statusId: 'S1', who: LUCA, emoji: '❤️', at: t0 + HOUR + 3000 })).toBe('liked')
+    expect(await recordStatusReaction(h, A, { statusId: 'NOT-MINE', who: ANNA, emoji: '💚', at: t0 })).toBeNull()
+    // a reply in Mario's chat to S1
+    const raw = { key: { remoteJid: MARIO, fromMe: false, id: 'M1' }, message: { extendedTextMessage: { text: '💯', contextInfo: { stanzaId: 'S1', participant: ME, remoteJid: 'status@broadcast' } } } }
+    await h.db.insertInto('messages').values({ account_id: A, chat_jid: MARIO, id: 'M1', from_me: 0, sender: MARIO, ts: Math.floor((t0 + 120_000) / 1000), type: 'extendedTextMessage', text: '💯', status: null, raw: JSON.stringify(raw) }).execute()
+
+    const r = await svc.statusViews(acc as never, { statusId: 'S1' })
+    const s1 = r.statuses[0]
+    expect(s1.likes).toBe(2)
+    expect(s1.likedBy).toEqual([
+      { jid: ANNA, name: 'Anna', phone: '+393330000003', emoji: '💚', likedAt: new Date(t0 + 90_000).toISOString() },
+      { jid: LUCA, name: 'Luca', phone: '+393330000002', emoji: '❤️', likedAt: new Date(t0 + HOUR + 3000).toISOString() },
+    ])
+    // Anna liked without a view receipt yet: she saw it all the same
+    expect(s1.viewers.map((v) => [v.name, v.liked])).toEqual([['Mario', null], ['Anna', '💚'], ['Luca', '❤️']])
+    expect(s1.notViewed).toEqual([])
+    expect(s1.replies).toEqual([{ jid: MARIO, name: 'Mario', phone: '+393330000001', text: '💯', at: new Date(Math.floor((t0 + 120_000) / 1000) * 1000).toISOString(), messageId: 'M1' }])
+  })
+
   it('the webhook line says who saw which status', () => {
     const line = describeEvent({ type: 'status.view', account: A, data: { statusId: 'S1', viewerName: 'Mario', viewerPhone: '+393330000001', statusType: 'image', statusText: 'Ciao a tutti' } })
     expect(line).toBe('Status seen on +971500000001 by Mario +393330000001 (image: Ciao a tutti)')
+    expect(describeEvent({ type: 'status.like', account: A, data: { statusId: 'S1', likerName: 'Anna', likerPhone: '+393330000003', emoji: '💚', statusType: 'text', statusText: 'Secondo' } })).toBe('Status liked (💚) on +971500000001 by Anna +393330000003 (text: Secondo)')
+    expect(describeEvent({ type: 'status.like', account: A, data: { statusId: 'S1', likerName: 'Anna', likerPhone: '+393330000003', emoji: '', removed: true, statusType: 'text', statusText: 'Secondo' } })).toBe('Like taken back on +971500000001 by Anna +393330000003 (text: Secondo)')
   })
 })

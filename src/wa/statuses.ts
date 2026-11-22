@@ -1,8 +1,9 @@
 /**
- * My own statuses (stories) and who saw them. WhatsApp tells every device of the poster when somebody
- * gets or opens a status (receipts on status@broadcast, Baileys' message-receipt.update): that is how
- * WhatsApp Web shows the viewers too. Kept here per status and per person; a status is gone after
- * 24 hours on WhatsApp, its record stays.
+ * My own statuses (stories) and who saw and liked them. WhatsApp tells every device of the poster when
+ * somebody gets or opens a status (receipts on status@broadcast, Baileys' message-receipt.update): that
+ * is how WhatsApp Web shows the viewers too. A like is a reaction sent to status@broadcast that points
+ * at the status; a reply (an emoji or a text) arrives in the chat with that person, quoting the status.
+ * Kept here per status and per person; a status is gone after 24 hours on WhatsApp, its record stays.
  */
 import { getContentType, normalizeMessageContent, type WAMessage } from '@whiskeysockets/baileys'
 import { upsert, type DbHandle } from '../db/index.js'
@@ -12,7 +13,7 @@ export const STATUS_JID = 'status@broadcast'
 export const STATUS_LIFE_MS = 24 * 3600_000
 
 export type StatusRow = { account_id: string; id: string; ts: number | null; type: string | null; text: string | null; audience: string | null; source: string | null; deleted: number | null }
-export type StatusViewRow = { account_id: string; status_id: string; viewer: string; delivered_at: number | null; viewed_at: number | null }
+export type StatusViewRow = { account_id: string; status_id: string; viewer: string; delivered_at: number | null; viewed_at: number | null; reaction: string | null; reacted_at: number | null }
 
 /** Save a status of mine, or what is new about it: fields not given keep their value; the audience and "posted by WhatsOps" are never lost. */
 export async function saveStatus(
@@ -64,10 +65,54 @@ export async function recordStatusReceipt(h: DbHandle, accountId: string, r: { s
   const cur = (await h.db.selectFrom('status_views').selectAll().where('account_id', '=', accountId).where('status_id', '=', r.statusId).where('viewer', '=', r.viewer).executeTakeFirst()) as StatusViewRow | undefined
   const delivered = cur?.delivered_at ?? r.deliveredAt ?? r.viewedAt ?? null
   const viewed = cur?.viewed_at ?? r.viewedAt ?? null
-  if (cur && Number(cur.delivered_at) === Number(delivered) && Number(cur.viewed_at ?? 0) === Number(viewed ?? 0)) return null
-  await upsert(h, 'status_views', { account_id: accountId, status_id: r.statusId, viewer: r.viewer, delivered_at: delivered, viewed_at: viewed }, ['account_id', 'status_id', 'viewer'])
+  if (cur && Number(cur.delivered_at ?? 0) === Number(delivered ?? 0) && Number(cur.viewed_at ?? 0) === Number(viewed ?? 0)) return null
+  await upsert(h, 'status_views', { account_id: accountId, status_id: r.statusId, viewer: r.viewer, delivered_at: delivered, viewed_at: viewed, reaction: cur?.reaction ?? null, reacted_at: cur?.reacted_at ?? null }, ['account_id', 'status_id', 'viewer'])
   if (viewed && !cur?.viewed_at) return 'viewed'
   return cur ? null : 'delivered'
+}
+
+/** A like (reaction) on a status, out of the message the liker's phone sends to status@broadcast; null for anything else. */
+export function statusReactionFromMessage(m: WAMessage): { statusId: string; who: string; whoAlt: string | null; emoji: string; at: number } | null {
+  const k = m.key as { remoteJid?: string | null; fromMe?: boolean | null; participant?: string | null; participantAlt?: string | null }
+  if (k?.remoteJid !== STATUS_JID || k.fromMe || !k.participant) return null
+  const r = normalizeMessageContent(m.message)?.reactionMessage
+  if (!r?.key?.id) return null
+  const at = Number(r.senderTimestampMs ?? 0) || Number(m.messageTimestamp ?? 0) * 1000 || Date.now()
+  return { statusId: r.key.id, who: k.participant, whoAlt: k.participantAlt ?? null, emoji: r.text ?? '', at }
+}
+
+/** The id of my status a chat message answers (an emoji or a text sent from the status), from its stored JSON; null if it answers none. */
+export function statusReplyOf(raw: string): string | null {
+  let m: { message?: Record<string, { contextInfo?: { remoteJid?: string; stanzaId?: string } } | null> }
+  try {
+    m = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  for (const part of Object.values(m.message ?? {})) {
+    const c = part && typeof part === 'object' ? part.contextInfo : undefined
+    if (c?.remoteJid === STATUS_JID && c.stanzaId) return c.stanzaId
+  }
+  return null
+}
+
+/**
+ * Somebody liked one of my statuses (emoji) or took the like back (empty emoji). Only statuses I posted
+ * count. Returns 'liked' / 'unliked' when that changes something, else null.
+ */
+export async function recordStatusReaction(h: DbHandle, accountId: string, r: { statusId: string; who: string; emoji: string; at: number }): Promise<'liked' | 'unliked' | null> {
+  const mine = await h.db.selectFrom('statuses').select('id').where('account_id', '=', accountId).where('id', '=', r.statusId).executeTakeFirst()
+  if (!mine) return null
+  const cur = (await h.db.selectFrom('status_views').selectAll().where('account_id', '=', accountId).where('status_id', '=', r.statusId).where('viewer', '=', r.who).executeTakeFirst()) as StatusViewRow | undefined
+  const emoji = r.emoji || null
+  if ((cur?.reaction ?? null) === emoji) return null
+  await upsert(
+    h,
+    'status_views',
+    { account_id: accountId, status_id: r.statusId, viewer: r.who, delivered_at: cur?.delivered_at ?? null, viewed_at: cur?.viewed_at ?? null, reaction: emoji, reacted_at: emoji ? r.at : null },
+    ['account_id', 'status_id', 'viewer'],
+  )
+  return emoji ? 'liked' : 'unliked'
 }
 
 /** My statuses posted since `since` (ms), newest first, or the one asked; deleted ones left out. */

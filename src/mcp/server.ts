@@ -409,8 +409,8 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
 
   tool(
     'whatsapp_status_views',
-    'Who saw my statuses',
-    'My WhatsApp statuses (stories) and who saw them: for each status who opened it and when, and who of its audience did not yet; people = who saw how many of the statuses listed (the whole story). Default: the statuses still visible (last 24 hours). Views are known for statuses posted since WhatsOps keeps them; the phone shows them too.',
+    'Who saw and liked my statuses',
+    'My WhatsApp statuses (stories) and who saw and liked them: for each status who opened it and when, who liked it (likedBy: the contact and the emoji), the replies it got (an emoji or a text sent from the status) and who of its audience did not open it yet; people = who saw and liked how many of the statuses listed (the whole story). Default: the statuses still visible (last 24 hours). Views and likes are known for statuses posted since WhatsOps keeps them; the phone shows them too.',
     'read',
     {
       status_id: z.string().optional().describe(L('One status only (id from whatsapp_post_status or from this list)')),
