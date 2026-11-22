@@ -94,6 +94,7 @@ const EN: Record<string, string> = {
 - Messages are sent as the owner: confirm wording and recipient with the user before calling a send tool unless they explicitly asked you to send.
 - Use whatsapp_accounts to see which numbers are connected; pass "account" to pick a non-default number.
 - Voice messages (type audioMessage): read their transcript, or call whatsapp_transcribe_voice to know what was said.
+- Every tool explained, with examples (Agent Skill): https://github.com/emrgim/WhatsOps/tree/main/skills/whatsops
 - Reply to the user in their language.`,
   '@otp': '🔐 WhatsOps login code: *{0}*\nValid for 5 minutes. If you did not request it, ignore this message.',
   '@otp_user': '🔐 WhatsOps — {1}, your login code: *{0}*\nValid for 5 minutes. If you did not request it, ignore this message.',
@@ -112,6 +113,7 @@ const IT: Record<string, string> = {
 - I messaggi partono a nome del proprietario: conferma testo e destinatario con l'utente prima di usare uno strumento di invio, salvo che te l'abbia chiesto esplicitamente.
 - whatsapp_accounts mostra i numeri collegati; passa "account" per usare un numero diverso da quello predefinito.
 - Messaggi vocali (tipo audioMessage): leggi la trascrizione, oppure usa whatsapp_transcribe_voice per sapere cosa è stato detto.
+- Tutti gli strumenti spiegati, con esempi (Agent Skill): https://github.com/emrgim/WhatsOps/tree/main/skills/whatsops
 - Rispondi all'utente nella sua lingua.`,
   '@otp': '🔐 Codice di accesso WhatsOps: *{0}*\nValido 5 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',
   '@otp_user': '🔐 WhatsOps — {1}, il tuo codice di accesso: *{0}*\nValido 5 minuti. Se non l’hai chiesto tu, ignora questo messaggio.',

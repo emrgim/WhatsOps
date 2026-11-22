@@ -16,7 +16,8 @@
     "build": "tsc -p tsconfig.json && node packaging/stamp-build.mjs",
     "start": "node dist/main.js",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "skill": "node packaging/build-skill.mjs"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.5",

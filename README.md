@@ -79,6 +79,8 @@ English and Italian: the config page follows the browser language, the server (M
 
 ## MCP tools
 
+Explained one by one, with parameters, in the [agent skill](skills/whatsops/references/tools.md).
+
 `whatsapp_accounts`, `whatsapp_get_profile`, `whatsapp_update_profile`, `whatsops_feedback`, `currentrms_discussions`, `currentrms_set_sync`, `currentrms_users`, `currentrms_user_invite`, `currentrms_record_group`, `rentman_projects`, `rentman_project_group`, `whatsapp_transcribe_voice`, `whatsapp_list_chats`, `whatsapp_list_labels`, `whatsapp_label_chat`, `whatsapp_get_messages`, `whatsapp_search_messages`, `whatsapp_find_contact`, `whatsapp_check_number`, `whatsapp_list_groups`, `whatsapp_get_group`, `whatsapp_send_text`, `whatsapp_send_media`, `whatsapp_post_status`, `whatsapp_send_location`, `whatsapp_react`, `whatsapp_mark_read`, `whatsapp_edit_message`, `whatsapp_delete_message`, `whatsapp_download_media`.
 
 ## Install
@@ -184,6 +186,17 @@ curl -H "Authorization: Bearer wam_…" \
 ```
 
 The full API vocabulary is in **Connectors → API** and at `/docs`.
+
+### Agent skill
+
+[`skills/whatsops`](skills/whatsops) is an [Agent Skill](https://agentskills.io) for the agent that connects: how to install and connect WhatsOps, the rules (it speaks as the owner), recipes, errors and every tool with all its parameters ([`references/tools.md`](skills/whatsops/references/tools.md)). [`skills/whatsops.skill`](skills/whatsops.skill) is the same folder as a ZIP, for apps that upload skills (Claude: Customize → Skills). Install it together with the MCP server; where each agent keeps skills is in [the skill itself](skills/whatsops/SKILL.md#3-install-this-skill). Every MCP tile in **Connectors → MCP** links it, and the server points agents to it on connect.
+
+```bash
+curl -fsSL https://github.com/emrgim/WhatsOps/raw/main/skills/whatsops.skill -o /tmp/whatsops.zip
+mkdir -p ~/.claude/skills && unzip -o /tmp/whatsops.zip -d ~/.claude/skills   # or ~/.cursor/skills, ~/.agents/skills, ~/.gemini/skills, ~/.hermes/skills
+```
+
+The tool reference is generated from the MCP server: after changing a tool run `npm run build && npm run skill` (`test/skill.test.ts` fails when the skill is out of date).
 
 ### Webhooks
 

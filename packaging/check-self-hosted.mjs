@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url'
 
 // addresses of real installations (written in pieces so this file does not match itself)
 const FORBIDDEN = [new RegExp(['[a-z0-9-]*\\.?', 'mrg', '\\.', 'im\\b'].join(''), 'i')]
-const DIRS = ['src', 'public', 'install', 'packaging', 'deploy', 'assets', 'test', '.github', 'dist']
+const DIRS = ['src', 'public', 'install', 'packaging', 'deploy', 'assets', 'test', '.github', 'dist', 'skills']
 const FILES = ['README.md', '.env.example', 'package.json']
 const BINARY = /\.(png|ico|icns|jpe?g|gif|webp|woff2?|ttf|otf|dmg|exe|zip|gz|tgz|db|sqlite|ogg|mp3|mp4)$/i
 

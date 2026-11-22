@@ -325,6 +325,12 @@ function detailHead(c, sub) {
 function endpointLine() {
   return `<p class="muted"><span>${esc(t('connect.endpoint'))}</span> <code>${esc(MCP)}</code> <button class="ghost small" data-copy="${esc(MCP)}">${esc(t('copy'))}</button></p>`
 }
+// the Agent Skill in the repository: the guide to every tool for the agent that connects
+const SKILL_URL = 'https://github.com/emrgim/WhatsOps/tree/main/skills/whatsops'
+const SKILL_FILE = 'https://github.com/emrgim/WhatsOps/raw/main/skills/whatsops.skill'
+function skillLine() {
+  return `<p class="muted"><span>${esc(t('connect.skill'))}</span> <a href="${SKILL_FILE}" download>whatsops.skill</a> · <a href="${SKILL_URL}#3-install-this-skill" target="_blank" rel="noopener">${esc(t('connect.skillHow'))}</a></p>`
+}
 function mcpSetup(id) {
   const cursorLink = `cursor://anysphere.cursor-deeplink/mcp/install?name=whatsops&config=${encodeURIComponent(btoa(JSON.stringify({ url: MCP })))}`
   switch (id) {
@@ -356,7 +362,7 @@ async function loadConnect() {
   $('#mcpBar').hidden = !!c
   $('#mcpDetail').hidden = !c
   if (!c) { $('#mcpTiles').innerHTML = tiles(MCP_CLIENTS, 'mcp'); return }
-  $('#mcpDetail').innerHTML = `${detailHead(c, 'mcp')}<div class="card client">${endpointLine()}${mcpSetup(c.id)}</div>
+  $('#mcpDetail').innerHTML = `${detailHead(c, 'mcp')}<div class="card client">${endpointLine()}${mcpSetup(c.id)}${skillLine()}</div>
     <div class="card"><h3>${esc(t('connect.appGrants'))}</h3><div id="grants"></div></div>`
   const o = await api('GET', '/v1/admin/oauth')
   const mine = o.grants.filter((g) => grantOf(g) === c.id)

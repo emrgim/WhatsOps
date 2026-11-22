@@ -17,6 +17,9 @@ function ok(data: unknown): ToolResult {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
 }
 
+/** The scope each tool needs (filled when the tools are registered; read by the skill builder). */
+export const TOOL_SCOPES = new Map<string, 'read' | 'send'>()
+
 /** Build a per-request MCP server; titles, descriptions and errors follow `lang`. */
 export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lang): McpServer {
   const L = (s: string) => tr(lang, s)
@@ -48,6 +51,7 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
     fn: (args: z.infer<z.ZodObject<S>>) => Promise<unknown | ToolResult>,
   ) => {
     const t = L(title)
+    TOOL_SCOPES.set(name, scope)
     server.registerTool(name, { title: t, description: L(description), inputSchema: shape, annotations: { title: t, ...annotations } }, (async (args: z.infer<z.ZodObject<S>>) => {
       try {
         requireScope(p, scope)
