@@ -326,10 +326,10 @@ function endpointLine() {
   return `<p class="muted"><span>${esc(t('connect.endpoint'))}</span> <code>${esc(MCP)}</code> <button class="ghost small" data-copy="${esc(MCP)}">${esc(t('copy'))}</button></p>`
 }
 // the Agent Skill in the repository: the guide to every tool for the agent that connects
-const SKILL_URL = 'https://github.com/emrgim/WhatsOps/tree/main/skills/whatsops'
 const SKILL_FILE = 'https://github.com/emrgim/WhatsOps/raw/main/skills/whatsops.skill'
+const SKILL_GUIDE = 'https://github.com/emrgim/WhatsOps/blob/main/skills/whatsops/SKILL.md'
 function skillLine() {
-  return `<p class="muted"><span>${esc(t('connect.skill'))}</span> <a href="${SKILL_FILE}" download>whatsops.skill</a> · <a href="${SKILL_URL}#3-install-this-skill" target="_blank" rel="noopener">${esc(t('connect.skillHow'))}</a></p>`
+  return `<p class="muted"><span>${esc(t('connect.skill'))}</span> <a href="${SKILL_FILE}" download>whatsops.skill</a> · <a href="${SKILL_GUIDE}#3-install-this-skill" target="_blank" rel="noopener">${esc(t('connect.skillHow'))}</a></p>`
 }
 function mcpSetup(id) {
   const cursorLink = `cursor://anysphere.cursor-deeplink/mcp/install?name=whatsops&config=${encodeURIComponent(btoa(JSON.stringify({ url: MCP })))}`

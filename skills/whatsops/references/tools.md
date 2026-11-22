@@ -12,7 +12,7 @@
 > - Messages are sent as the owner: confirm wording and recipient with the user before calling a send tool unless they explicitly asked you to send.
 > - Use whatsapp_accounts to see which numbers are connected; pass "account" to pick a non-default number.
 > - Voice messages (type audioMessage): read their transcript, or call whatsapp_transcribe_voice to know what was said.
-> - Every tool explained, with examples (Agent Skill): https://github.com/emrgim/WhatsOps/tree/main/skills/whatsops
+> - Every tool explained, with examples (Agent Skill): https://raw.githubusercontent.com/emrgim/WhatsOps/main/skills/whatsops/SKILL.md
 > - Reply to the user in their language.
 
 ## Numbers and profile
