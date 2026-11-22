@@ -570,9 +570,11 @@ export class WaAccount {
     for (const x of ([] as Assoc[]).concat((events['labels.association'] as Assoc | Assoc[] | undefined) ?? [])) {
       const a = x?.association
       if (!a?.labelId || !a.chatId) continue
-      const chat = this.store.canonical(a.chatId)
+      // kept as WhatsApp writes it (phone number or LID): taking a label off needs the same form
+      const raw = bareJid(a.chatId) ?? a.chatId
+      const chat = this.store.canonical(raw)
       const messageId = a.type === 'label_message' ? a.messageId ?? null : null
-      const changed = await linkLabel(h, this.row.id, { labelId: a.labelId, chat, messageId }, x.type !== 'remove')
+      const changed = await linkLabel(h, this.row.id, { labelId: a.labelId, chat: raw, messageId }, x.type !== 'remove')
       if (!changed || quiet) continue
       const name = (await listLabels(h, this.row.id)).find((l) => l.id === a.labelId)?.name ?? null
       this.ctx.bus.publish('label.update', this.row.id, {
@@ -603,6 +605,10 @@ export class WaAccount {
     const sock = this.requireOpen()
     const keys = sock.authState.keys
     const before = ((await keys.get('app-state-sync-version', ['regular'])) as Record<string, unknown>)['regular']
+    // the full copy is the whole truth: start from no links, put the old ones back if it cannot be read
+    const db = this.ctx.h.db
+    const oldLinks = await db.selectFrom('label_links').selectAll().where('account_id', '=', this.row.id).execute()
+    await db.deleteFrom('label_links').where('account_id', '=', this.row.id).execute()
     this.labelsQuiet = true
     try {
       await keys.set({ 'app-state-sync-version': { regular: null } } as never)
@@ -610,7 +616,11 @@ export class WaAccount {
     } finally {
       this.labelsQuiet = false
       const after = ((await keys.get('app-state-sync-version', ['regular'])) as Record<string, unknown>)['regular']
-      if (!after && before) await keys.set({ 'app-state-sync-version': { regular: before } } as never)
+      if (!after && before) {
+        await keys.set({ 'app-state-sync-version': { regular: before } } as never)
+        await db.deleteFrom('label_links').where('account_id', '=', this.row.id).execute()
+        for (let i = 0; i < oldLinks.length; i += 200) await db.insertInto('label_links').values(oldLinks.slice(i, i + 200)).execute()
+      }
     }
     await setSetting(this.ctx.h, `labels_read:${this.row.id}`, String(now()))
     const list = await listLabels(this.ctx.h, this.row.id)

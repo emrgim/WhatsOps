@@ -246,6 +246,22 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   )
 
   tool(
+    'whatsapp_label_chat',
+    'Label a chat',
+    'Put WhatsApp Business labels on a chat, or one of its messages, or take them off (labels by name or id, see whatsapp_list_labels). To change a label, remove the old one and add the new one in the same call. The phone and WhatsApp Web show the change too.',
+    'send',
+    {
+      chat: z.string().describe(L('Phone number (+971…), JID or exact chat/contact name')),
+      add: z.array(z.string()).optional().describe(L('Labels to put on (name or id)')),
+      remove: z.array(z.string()).optional().describe(L('Labels to take off (name or id)')),
+      message_id: z.string().optional().describe(L('A message of the chat to label instead of the whole chat')),
+      account,
+    },
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    async (a) => app.svc.labelChat(acc(a.account), { chat: a.chat, add: a.add, remove: a.remove, messageId: a.message_id }),
+  )
+
+  tool(
     'whatsapp_get_messages',
     'Read chat messages',
     'Get messages of one chat in chronological order (oldest → newest). Use before/after (ISO date) to page. Voice messages (type audioMessage, with seconds) carry their transcript when it is ready; when transcript is null, call whatsapp_transcribe_voice to get what was said.',

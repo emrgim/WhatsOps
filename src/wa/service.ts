@@ -1,5 +1,5 @@
 import crypto from 'node:crypto'
-import { downloadMediaMessage, getContentType, jidNormalizedUser, normalizeMessageContent, type AnyMessageContent, type WAMessageKey } from '@whiskeysockets/baileys'
+import { downloadMediaMessage, getContentType, isWABusinessPlatform, jidNormalizedUser, normalizeMessageContent, type AnyMessageContent, type WAMessageKey } from '@whiskeysockets/baileys'
 import { sql } from 'kysely'
 import { now, upsert, type DbHandle } from '../db/index.js'
 import { logger } from '../log.js'
@@ -160,6 +160,50 @@ export class WaService {
       out.set(c, list)
     }
     return out
+  }
+
+  /**
+   * Put labels on a chat (or one of its messages) or take them off: the change goes to WhatsApp, so the
+   * phone and WhatsApp Web show it too. WhatsApp Business only (regular WhatsApp has chat lists instead).
+   */
+  async labelChat(acc: WaAccount, i: { chat: string; add?: string[]; remove?: string[]; messageId?: string }) {
+    const sock = acc.requireOpen()
+    const platform = (sock.authState.creds as { platform?: string }).platform
+    if (platform && !isWABusinessPlatform(platform)) throw new AppError('LABELS_BUSINESS_ONLY', 'Labels can be changed only on a WhatsApp Business number', 400)
+    if (!i.add?.length && !i.remove?.length) throw new AppError('LABELS_NOTHING', 'Say which labels to add or remove', 400)
+    const chat = await this.resolveChat(acc, i.chat)
+    const labels = await listLabels(this.h, acc.id)
+    const add = (i.add ?? []).map((x) => pickLabel(labels, x))
+    const remove = (i.remove ?? []).map((x) => pickLabel(labels, x))
+    const msgId = i.messageId?.trim() || null
+    const links = await labelLinks(this.h, acc.id, undefined, acc.store.aliases(chat))
+    // WhatsApp keeps the labels of a chat under one form of its id (phone number or LID): keep using it
+    const form = links[0]?.chat ?? chat
+    const here = links.filter((k) => (k.messageId ?? null) === msgId)
+    const has = new Set(here.map((k) => k.labelId))
+    const added: string[] = []
+    const removed: string[] = []
+    for (const l of remove) {
+      const forms = [...new Set(here.filter((k) => k.labelId === l.id).map((k) => k.chat))]
+      for (const f of forms) {
+        if (msgId) await sock.removeMessageLabel(f, msgId, l.id)
+        else await sock.removeChatLabel(f, l.id)
+      }
+      if (forms.length) {
+        removed.push(l.name)
+        has.delete(l.id)
+      }
+    }
+    for (const l of add) {
+      if (has.has(l.id)) continue
+      if (msgId) await sock.addMessageLabel(form, msgId, l.id)
+      else await sock.addChatLabel(form, l.id)
+      added.push(l.name)
+      has.add(l.id)
+    }
+    if (added.length || removed.length) logger.info({ account: acc.id, added, removed, message: msgId }, 'labels changed on a chat')
+    // the table follows from WhatsApp's own echo of the change (labels.association)
+    return { chat, messageId: msgId, added, removed, labels: labels.filter((l) => has.has(l.id)).map((l) => ({ id: l.id, name: l.name })) }
   }
 
   /** Read every label again from WhatsApp (normally not needed: changes arrive by themselves). */

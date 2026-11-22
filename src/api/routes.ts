@@ -442,6 +442,20 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     async (req) => app.svc.labels(accountFor(app, P(req), req.query.account), req.params.label),
   )
 
+  f.put(
+    '/v1/chats/:chat/labels',
+    {
+      preHandler: guard('send'),
+      schema: {
+        ...tags('Messages'),
+        summary: 'Put labels on a chat (or a message of it) or take them off (WhatsApp Business)',
+        params: z.object({ chat: z.string() }),
+        body: z.object({ add: z.array(z.string()).optional(), remove: z.array(z.string()).optional(), messageId: z.string().optional(), account: acct }),
+      },
+    },
+    async (req) => app.svc.labelChat(accountFor(app, P(req), req.body.account), { chat: req.params.chat, add: req.body.add, remove: req.body.remove, messageId: req.body.messageId }),
+  )
+
   f.post(
     '/v1/labels/reload',
     { preHandler: guard('admin'), schema: { ...tags('Messages'), summary: 'Read every label again from WhatsApp', body: z.object({ account: acct }).optional() } },

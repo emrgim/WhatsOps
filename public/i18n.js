@@ -262,6 +262,7 @@ window.WA_API_IT = {
  "Labels of the number, with how many chats and messages carry each": "Etichette del numero, con quante chat e quanti messaggi hanno ciascuna",
  "Chats and messages that carry a label (name or id)": "Chat e messaggi che hanno un’etichetta (nome o id)",
  "Read every label again from WhatsApp": "Rileggi tutte le etichette da WhatsApp",
+ "Put labels on a chat (or a message of it) or take them off (WhatsApp Business)": "Metti o togli le etichette di una chat (o di un suo messaggio) (WhatsApp Business)",
  "Post a status (story) only the listed people can see": "Pubblica uno stato (storia) che vedono solo le persone indicate",
  "Server overview": "Panoramica del server",
  "Server-Sent Events stream": "Flusso Server-Sent Events",
