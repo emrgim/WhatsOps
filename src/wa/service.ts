@@ -7,6 +7,7 @@ import type { Settings } from '../settings.js'
 import { AppError, bareJid, digits, isGroupJid, toJid, userOf } from '../util.js'
 import type { WaAccount } from './account.js'
 import type { AccountManager } from './manager.js'
+import { labelLinks, listLabels, pickLabel, type Label } from './labels.js'
 import { parseMessage, type MessageRow } from './store.js'
 
 export type MediaType = 'image' | 'video' | 'audio' | 'document' | 'sticker'
@@ -90,8 +91,17 @@ export class WaService {
   }
 
   // ------------------------------------------------------------ reads
-  async listChats(acc: WaAccount, o: { limit?: number; offset?: number; unreadOnly?: boolean; query?: string; type?: 'all' | 'groups' | 'direct' }) {
+  async listChats(acc: WaAccount, o: { limit?: number; offset?: number; unreadOnly?: boolean; query?: string; type?: 'all' | 'groups' | 'direct'; label?: string }) {
+    const labels = await listLabels(this.h, acc.id)
     let q = this.h.db.selectFrom('chats').selectAll().where('account_id', '=', acc.id)
+    if (o.label) {
+      // chats carrying the label (stored under the phone number or the LID)
+      const l = pickLabel(labels, o.label)
+      const jids = new Set<string>()
+      for (const k of await labelLinks(this.h, acc.id, l.id)) if (!k.messageId) for (const j of acc.store.aliases(acc.store.canonical(k.chat))) jids.add(j)
+      if (!jids.size) return []
+      q = q.where('jid', 'in', [...jids])
+    }
     if (o.unreadOnly) q = q.where('unread', '>', 0)
     if (o.type === 'groups') q = q.where('is_group', '=', 1)
     if (o.type === 'direct') q = q.where('is_group', '=', 0)
@@ -101,6 +111,7 @@ export class WaService {
       .limit(Math.min(o.limit ?? 30, 200))
       .offset(o.offset ?? 0)
       .execute()
+    const onChat = await this.chatLabels(acc, labels, rows.map((r) => r.jid))
     const out = []
     for (const r of rows) {
       const last = await this.h.db
@@ -121,9 +132,52 @@ export class WaService {
         pinned: !!r.pinned,
         lastMessageAt: r.last_ts ? new Date(r.last_ts * 1000).toISOString() : null,
         lastMessage: last ? { id: last.id, fromMe: !!last.from_me, text: last.text, type: last.type } : null,
+        labels: onChat.get(r.jid) ?? [],
       })
     }
     return out
+  }
+
+  /** Labels on these chats (not on their messages), by chat. */
+  private async chatLabels(acc: WaAccount, labels: Label[], chats: string[]): Promise<Map<string, { id: string; name: string }[]>> {
+    const out = new Map<string, { id: string; name: string }[]>()
+    if (!labels.length || !chats.length) return out
+    const owner = new Map<string, string>() // alias → chat as listed
+    for (const c of chats) for (const j of acc.store.aliases(c)) owner.set(j, c)
+    const names = new Map(labels.map((l) => [l.id, l.name]))
+    for (const k of await labelLinks(this.h, acc.id, undefined, [...owner.keys()])) {
+      const c = owner.get(k.chat)
+      if (!c || k.messageId || !names.has(k.labelId)) continue
+      const list = out.get(c) ?? []
+      if (!list.some((x) => x.id === k.labelId)) list.push({ id: k.labelId, name: names.get(k.labelId)! })
+      out.set(c, list)
+    }
+    return out
+  }
+
+  /** Read every label again from WhatsApp (normally not needed: changes arrive by themselves). */
+  async reloadLabels(acc: WaAccount) {
+    return acc.readAllLabels()
+  }
+
+  /** The labels of the number; with a label (id or name), the chats and messages that carry it. */
+  async labels(acc: WaAccount, labelInput?: string) {
+    const labels = await listLabels(this.h, acc.id)
+    if (!labelInput) return { labels }
+    const label = pickLabel(labels, labelInput)
+    const chats: { jid: string; name: string | null; phone: string | null; isGroup: boolean }[] = []
+    const messages: { chat: string; chatName: string | null; id: string; message: unknown }[] = []
+    for (const k of await labelLinks(this.h, acc.id, label.id)) {
+      const jid = acc.store.canonical(k.chat)
+      const name = await acc.store.nameOf(jid)
+      if (!k.messageId) {
+        if (!chats.some((c) => c.jid === jid)) chats.push({ jid, name, phone: isGroupJid(jid) ? null : acc.store.phoneOf(jid), isGroup: isGroupJid(jid) })
+        continue
+      }
+      const row = await acc.store.loadRow(jid, k.messageId)
+      messages.push({ chat: jid, chatName: name, id: k.messageId, message: row ? await acc.summarize(row) : null })
+    }
+    return { label, chats, messages }
   }
 
   async getMessages(acc: WaAccount, chatInput: string, o: { limit?: number; before?: string | number; after?: string | number }) {

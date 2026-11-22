@@ -424,10 +424,28 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       schema: {
         ...tags('Messages'),
         summary: 'List chats',
-        querystring: z.object({ account: acct, limit: z.coerce.number().int().min(1).max(200).optional(), offset: z.coerce.number().int().min(0).optional(), unread: z.enum(['true', 'false']).optional(), q: z.string().optional(), type: z.enum(['all', 'groups', 'direct']).optional() }),
+        querystring: z.object({ account: acct, limit: z.coerce.number().int().min(1).max(200).optional(), offset: z.coerce.number().int().min(0).optional(), unread: z.enum(['true', 'false']).optional(), q: z.string().optional(), type: z.enum(['all', 'groups', 'direct']).optional(), label: z.string().optional() }),
       },
     },
-    async (req) => app.svc.listChats(accountFor(app, P(req), req.query.account), { limit: req.query.limit, offset: req.query.offset, unreadOnly: req.query.unread === 'true', query: req.query.q, type: req.query.type }),
+    async (req) => app.svc.listChats(accountFor(app, P(req), req.query.account), { limit: req.query.limit, offset: req.query.offset, unreadOnly: req.query.unread === 'true', query: req.query.q, type: req.query.type, label: req.query.label }),
+  )
+
+  f.get(
+    '/v1/labels',
+    { preHandler: guard('read'), schema: { ...tags('Messages'), summary: 'Labels of the number, with how many chats and messages carry each', querystring: z.object({ account: acct }) } },
+    async (req) => app.svc.labels(accountFor(app, P(req), req.query.account)),
+  )
+
+  f.get(
+    '/v1/labels/:label',
+    { preHandler: guard('read'), schema: { ...tags('Messages'), summary: 'Chats and messages that carry a label (name or id)', params: z.object({ label: z.string() }), querystring: z.object({ account: acct }) } },
+    async (req) => app.svc.labels(accountFor(app, P(req), req.query.account), req.params.label),
+  )
+
+  f.post(
+    '/v1/labels/reload',
+    { preHandler: guard('admin'), schema: { ...tags('Messages'), summary: 'Read every label again from WhatsApp', body: z.object({ account: acct }).optional() } },
+    async (req) => app.svc.reloadLabels(accountFor(app, P(req), (req.body as { account?: string } | undefined)?.account)),
   )
 
   f.get(

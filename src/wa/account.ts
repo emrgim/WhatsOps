@@ -9,13 +9,14 @@ import makeWASocket, {
 } from '@whiskeysockets/baileys'
 import NodeCache from 'node-cache'
 import QRCode from 'qrcode'
-import { now, type DbHandle } from '../db/index.js'
+import { getSetting, now, setSetting, type DbHandle } from '../db/index.js'
 import type { EventBus } from '../events.js'
 import { logger } from '../log.js'
 import type { Settings } from '../settings.js'
 import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
 import { attachProbe, captureLocationKey, PROBE_ON, probeActiveShares, probeSubscribe } from './live-location-probe.js'
+import { linkLabel, listLabels, saveLabel } from './labels.js'
 import { audioInfo, WaStore } from './store.js'
 
 export type AccountRow = {
@@ -262,6 +263,8 @@ export class WaAccount {
     sock.ev.process(async (events) => {
       if (gen !== this.generation) return
       try {
+        // read before any await: labels coming from the one-time full read make no webhook events
+        if (events['labels.edit'] || events['labels.association']) await this.onLabels(events, this.labelsQuiet)
         if (events['creds.update']) {
           await saveCreds()
           const n = events['creds.update'].me?.name
@@ -407,6 +410,9 @@ export class WaAccount {
       setTimeout(() => {
         if (gen === this.generation && this.state === 'open') void this.refreshGroups()
       }, 8000).unref()
+      setTimeout(() => {
+        if (gen === this.generation && this.state === 'open') void this.readLabelsOnce()
+      }, 12_000).unref()
     }
     if (u.connection === 'close') {
       if (gen !== this.generation) return
@@ -504,6 +510,8 @@ export class WaAccount {
   // ---------------------------------------------------------------- profile (name · info · photo)
   private profileCache: ProfileRow | null = null
   private nameResynced = false
+  private labelsQuiet = false
+  private labelsAsked = false
 
   displayName(): string {
     if (this.row.me_name && !BAD_NAMES.has(this.row.me_name)) return this.row.me_name
@@ -546,6 +554,69 @@ export class WaAccount {
     await this.ctx.h.db.updateTable('accounts').set({ me_name: name, label: name, updated_at: now() }).where('id', '=', this.row.id).execute()
     logger.info({ account: this.row.id, source }, `profile name: ${before} → ${name}`)
     this.ctx.bus.publish('profile.update', this.row.id, { name, about: this.profileCache?.about ?? null, photo: !!this.profileCache?.photo })
+  }
+
+  // ------------------------------------------------------------------ labels
+  /** Labels created/changed, and put on or taken off chats and messages (WhatsApp app state). */
+  private async onLabels(events: { 'labels.edit'?: unknown; 'labels.association'?: unknown }, quiet: boolean): Promise<void> {
+    type Edit = { id?: string; name?: string | null; color?: number | null; deleted?: boolean | null; predefinedId?: string | null }
+    type Assoc = { type?: 'add' | 'remove'; association?: { type?: string; chatId?: string; labelId?: string; messageId?: string } }
+    const h = this.ctx.h
+    for (const l of ([] as Edit[]).concat((events['labels.edit'] as Edit | Edit[] | undefined) ?? [])) {
+      if (!l?.id) continue
+      const changed = await saveLabel(h, this.row.id, { id: l.id, name: l.name, color: l.color, deleted: l.deleted, predefinedId: l.predefinedId })
+      if (changed && !quiet) this.ctx.bus.publish('label.update', this.row.id, { action: l.deleted ? 'delete' : 'edit', label: { id: l.id, name: l.name ?? null } })
+    }
+    for (const x of ([] as Assoc[]).concat((events['labels.association'] as Assoc | Assoc[] | undefined) ?? [])) {
+      const a = x?.association
+      if (!a?.labelId || !a.chatId) continue
+      const chat = this.store.canonical(a.chatId)
+      const messageId = a.type === 'label_message' ? a.messageId ?? null : null
+      const changed = await linkLabel(h, this.row.id, { labelId: a.labelId, chat, messageId }, x.type !== 'remove')
+      if (!changed || quiet) continue
+      const name = (await listLabels(h, this.row.id)).find((l) => l.id === a.labelId)?.name ?? null
+      this.ctx.bus.publish('label.update', this.row.id, {
+        action: x.type === 'remove' ? 'remove' : 'add',
+        label: { id: a.labelId, name },
+        chat,
+        chatName: await this.store.nameOf(chat),
+        chatPhone: chat.endsWith('@g.us') ? null : this.store.phoneOf(chat),
+        messageId,
+      })
+    }
+  }
+
+  /** Once per number: the labels set before WhatsOps stored them. */
+  private async readLabelsOnce(): Promise<void> {
+    if (this.labelsAsked) return
+    this.labelsAsked = true
+    if (await getSetting(this.ctx.h, `labels_read:${this.row.id}`)) return
+    await this.readAllLabels().catch((e) => logger.warn({ account: this.row.id, err: String(e) }, 'labels not read from WhatsApp'))
+  }
+
+  /**
+   * All the labels and who carries them: WhatsApp keeps them in the app state collection "regular";
+   * ask for a full copy of it (no webhook event for each label already there). If the copy cannot be
+   * read, the previous state is put back.
+   */
+  async readAllLabels(): Promise<{ labels: number; chats: number; messages: number }> {
+    const sock = this.requireOpen()
+    const keys = sock.authState.keys
+    const before = ((await keys.get('app-state-sync-version', ['regular'])) as Record<string, unknown>)['regular']
+    this.labelsQuiet = true
+    try {
+      await keys.set({ 'app-state-sync-version': { regular: null } } as never)
+      await sock.resyncAppState(['regular'], true)
+    } finally {
+      this.labelsQuiet = false
+      const after = ((await keys.get('app-state-sync-version', ['regular'])) as Record<string, unknown>)['regular']
+      if (!after && before) await keys.set({ 'app-state-sync-version': { regular: before } } as never)
+    }
+    await setSetting(this.ctx.h, `labels_read:${this.row.id}`, String(now()))
+    const list = await listLabels(this.ctx.h, this.row.id)
+    const out = { labels: list.length, chats: list.reduce((n, l) => n + l.chats, 0), messages: list.reduce((n, l) => n + l.messages, 0) }
+    logger.info({ account: this.row.id, ...out }, `labels read from WhatsApp: ${out.labels}`)
+    return out
   }
 
   /** Read name, info and (optionally) photo from WhatsApp. */

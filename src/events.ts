@@ -25,7 +25,7 @@ export class EventBus extends EventEmitter {
   }
 }
 
-export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.transcribed', 'message.update', 'connection.update', 'history.sync', 'chat.update', 'profile.update'] as const
+export const WEBHOOK_EVENTS = ['message.received', 'message.sent', 'message.transcribed', 'message.update', 'connection.update', 'history.sync', 'chat.update', 'label.update', 'profile.update'] as const
 
 const RETRY_DELAYS = [60_000, 5 * 60_000, 30 * 60_000, 2 * 3600_000, 12 * 3600_000]
 
@@ -119,6 +119,15 @@ export function describeEvent(ev: Pick<WaEvent, 'type' | 'account' | 'data'>): s
     const len = d.seconds ? ` (${d.seconds} s)` : ''
     const said = d.transcript ? `: ${d.transcript.length > 3000 ? `${d.transcript.slice(0, 3000)}…` : d.transcript}` : ' (no words)'
     return d.fromMe ? `Voice message${len} sent from ${on}${inGroup}, transcribed${said}` : `Voice message${len} received on ${on} from ${who}${inGroup}, transcribed${said}`
+  }
+  if (ev.type === 'label.update') {
+    const l = ev.data as { action?: string; label?: { name?: string | null; id?: string }; chat?: string; chatName?: string | null; chatPhone?: string | null; messageId?: string | null } | undefined
+    const name = `"${l?.label?.name || l?.label?.id || '?'}"`
+    if (l?.action === 'edit') return `Label ${name} created or changed on ${on}`
+    if (l?.action === 'delete') return `Label ${name} deleted on ${on}`
+    const chat = [l?.chatName, l?.chatPhone].filter(Boolean).join(' ') || l?.chat || '?'
+    const what = l?.messageId ? `a message in the chat ${chat}` : `the chat ${chat}`
+    return `Label ${name} ${l?.action === 'remove' ? 'taken off' : 'put on'} ${what} on ${on}`
   }
   if (ev.type === 'webhook.test') return `Test event from WhatsOps (${on}): the webhook works.`
   if (ev.type === 'connection.update') return `WhatsApp number ${on}: connection ${d.state ?? 'changed'}`

@@ -217,7 +217,7 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
   tool(
     'whatsapp_list_chats',
     'List chats',
-    'List recent chats (most recent first) with the last message preview and unread count.',
+    'List recent chats (most recent first) with the last message preview, unread count and labels.',
     'read',
     {
       account,
@@ -226,9 +226,23 @@ export function buildMcpServer(app: App, p: Principal, origin: string, lang: Lan
       unread_only: z.boolean().optional().describe(L('Only chats with unread messages')),
       query: z.string().optional().describe(L('Filter by chat name')),
       type: z.enum(['all', 'groups', 'direct']).optional().describe(L('Chat type: all, groups or direct')),
+      label: z.string().optional().describe(L('Only chats with this label (name or id, see whatsapp_list_labels)')),
     },
     { readOnlyHint: true },
-    async (a) => app.svc.listChats(acc(a.account), { limit: a.limit, offset: a.offset, unreadOnly: a.unread_only, query: a.query, type: a.type }),
+    async (a) => app.svc.listChats(acc(a.account), { limit: a.limit, offset: a.offset, unreadOnly: a.unread_only, query: a.query, type: a.type, label: a.label }),
+  )
+
+  tool(
+    'whatsapp_list_labels',
+    'List labels',
+    'WhatsApp labels of the number (WhatsApp Business labels such as New customer or Paid; on regular WhatsApp the chat lists) with how many chats and messages carry each. With label (name or id): the chats and the messages that carry it.',
+    'read',
+    {
+      account,
+      label: z.string().optional().describe(L('A label (name or id): its chats and messages')),
+    },
+    { readOnlyHint: true },
+    async (a) => app.svc.labels(acc(a.account), a.label),
   )
 
   tool(

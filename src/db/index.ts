@@ -262,6 +262,17 @@ export const TABLES: TableDef[] = [
     ],
     pk: ['account_id', 'chat_jid', 'msg_id'],
   },
+  // WhatsApp labels (Business) / chat lists, and which chats and messages carry them (src/wa/labels.ts)
+  {
+    name: 'labels',
+    cols: [['account_id', 'id', 'notnull'], ['label_id', 'short', 'notnull'], ['name', 'name'], ['color', 'int'], ['predefined_id', 'short'], ['deleted', 'int'], ['updated_at', 'big']],
+    pk: ['account_id', 'label_id'],
+  },
+  {
+    name: 'label_links',
+    cols: [['account_id', 'id', 'notnull'], ['label_id', 'short', 'notnull'], ['chat_jid', 'key', 'notnull'], ['msg_id', 'key', 'notnull'], ['updated_at', 'big']],
+    pk: ['account_id', 'label_id', 'chat_jid', 'msg_id'],
+  },
   {
     name: 'admin_sessions',
     cols: [['id_hash', 'key', 'notnull'], ['label', 'name'], ['created_at', 'big'], ['expires_at', 'big'], ['last_seen', 'big'], ['user_id', 'id']],
