@@ -16,7 +16,7 @@ import type { Settings } from '../settings.js'
 import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
 import { attachProbe, captureLocationKey, PROBE_ON, probeActiveShares, probeSubscribe } from './live-location-probe.js'
-import { linkLabel, listLabels, saveLabel } from './labels.js'
+import { cleanName, isBuiltInFilter, linkLabel, listLabels, saveLabel } from './labels.js'
 import { audioInfo, WaStore } from './store.js'
 
 export type AccountRow = {
@@ -565,7 +565,7 @@ export class WaAccount {
     for (const l of ([] as Edit[]).concat((events['labels.edit'] as Edit | Edit[] | undefined) ?? [])) {
       if (!l?.id) continue
       const changed = await saveLabel(h, this.row.id, { id: l.id, name: l.name, color: l.color, deleted: l.deleted, predefinedId: l.predefinedId })
-      if (changed && !quiet) this.ctx.bus.publish('label.update', this.row.id, { action: l.deleted ? 'delete' : 'edit', label: { id: l.id, name: l.name ?? null } })
+      if (changed && !quiet && !isBuiltInFilter({ name: l.name ?? null, predefined_id: l.predefinedId ?? null })) this.ctx.bus.publish('label.update', this.row.id, { action: l.deleted ? 'delete' : 'edit', label: { id: l.id, name: cleanName(l.name) || null } })
     }
     for (const x of ([] as Assoc[]).concat((events['labels.association'] as Assoc | Assoc[] | undefined) ?? [])) {
       const a = x?.association

@@ -56,6 +56,16 @@ describe('labels', () => {
     expect(await listLabels(h, 'other')).toEqual([])
   })
 
+  it('names written by WhatsApp lose their invisible mark; its own filters (Unread, Favorites, Groups) are not labels', async () => {
+    await saveLabel(h, 'biz', { id: '7', name: '\u200eFollow up', color: 12, deleted: false, predefinedId: '7' })
+    await saveLabel(h, 'biz', { id: '12', name: '\u200eUnread', color: 0, deleted: false })
+    await saveLabel(h, 'biz', { id: '13', name: '\u200eFavorites', color: 0, deleted: false })
+    await saveLabel(h, 'biz', { id: '22', name: 'WhatsOps', color: 0, deleted: false })
+    const list = await listLabels(h, 'biz')
+    expect(list.map((l) => l.name)).toEqual(['Follow up', 'WhatsOps'])
+    expect(pickLabel(list, 'follow up').id).toBe('7')
+  })
+
   it('a label is picked by id or by name, not caring about case', async () => {
     const all = await listLabels(h, A)
     expect(pickLabel(all, '2').name).toBe('Paid')

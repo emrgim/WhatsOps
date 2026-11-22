@@ -34,6 +34,15 @@ export async function linkLabel(h: DbHandle, accountId: string, a: { labelId: st
   return true
 }
 
+// names WhatsApp writes itself (its own labels, its filters) start with an invisible left-to-right mark
+const MARKS = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g
+export const cleanName = (s: string | null | undefined): string => String(s ?? '').replace(MARKS, '').trim()
+/**
+ * WhatsApp's own chat filters (Unread, Favorites, Groups) travel as labels too: a name written by
+ * WhatsApp and no predefined label id. They are not labels anybody put on a chat: left out.
+ */
+export const isBuiltInFilter = (r: { name: string | null; predefined_id: string | null }): boolean => /^\u200e/.test(r.name ?? '') && !r.predefined_id
+
 const byId = (a: { id: string }, b: { id: string }) => (Number(a.id) || 0) - (Number(b.id) || 0) || a.id.localeCompare(b.id)
 
 /** The labels of the number (deleted ones left out), with how many chats and messages carry each. */
@@ -48,8 +57,8 @@ export async function listLabels(h: DbHandle, accountId: string): Promise<Label[
     count.set(l.label_id, c)
   }
   return rows
-    .filter((r) => !Number(r.deleted))
-    .map((r) => ({ id: r.label_id, name: r.name ?? '', color: r.color == null ? null : Number(r.color), predefinedId: r.predefined_id ?? null, ...(count.get(r.label_id) ?? { chats: 0, messages: 0 }) }))
+    .filter((r) => !Number(r.deleted) && !isBuiltInFilter(r))
+    .map((r) => ({ id: r.label_id, name: cleanName(r.name), color: r.color == null ? null : Number(r.color), predefinedId: r.predefined_id ?? null, ...(count.get(r.label_id) ?? { chats: 0, messages: 0 }) }))
     .sort(byId)
 }
 
