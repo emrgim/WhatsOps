@@ -151,6 +151,62 @@ export function signPayload(secret: string, ts: string, body: string): string {
   return 'sha256=' + crypto.createHmac('sha256', secret).update(`${ts}.${body}`).digest('hex')
 }
 
+/**
+ * WEBHOOK_ALLOW_JIDS — if unset, every matching webhook event is forwarded (default).
+ * If set, even to an empty string, only events whose chat is in the list are forwarded.
+ * An empty list forwards nothing; messages are still stored in the database.
+ * Entries are comma or whitespace separated JIDs (`9715…@s.whatsapp.net`, `…@g.us`) or phone numbers.
+ */
+export function parseWebhookAllowJids(raw: string | undefined): Set<string> | null {
+  if (raw === undefined) return null
+  const allow = new Set<string>()
+  for (const part of raw.split(/[,\s]+/)) {
+    for (const tok of webhookAllowTokens(part)) allow.add(tok)
+  }
+  return allow
+}
+
+function webhookAllowTokens(raw: string): string[] {
+  const t = raw.trim()
+  if (!t) return []
+  if (t.includes("@")) {
+    const jid = t.toLowerCase()
+    const user = jid.split("@")[0].replace(/^\+/, "")
+    const out = [jid]
+    if (jid.endsWith("@s.whatsapp.net") || jid.endsWith("@c.us")) {
+      const digits = user.replace(/\D/g, "")
+      if (digits) out.push(digits, `${digits}@s.whatsapp.net`)
+    }
+    return out
+  }
+  const digits = t.replace(/^\+/, "").replace(/\D/g, "")
+  return digits ? [digits, `${digits}@s.whatsapp.net`] : []
+}
+
+export function webhookEventChat(data: unknown): string | null {
+  if (!data || typeof data !== "object") return null
+  const chat = (data as { chat?: unknown }).chat
+  return typeof chat === "string" && chat ? chat : null
+}
+
+/** null allowlist = no filter (forward all). Empty set = forward nothing. */
+export function isWebhookEventAllowed(ev: Pick<WaEvent, "data">, allow: Set<string> | null): boolean {
+  if (allow === null) return true
+  if (allow.size === 0) return false
+  const chat = webhookEventChat(ev.data)
+  if (!chat) return false
+  const phone = ev.data && typeof ev.data === "object" ? (ev.data as { chatPhone?: string | null }).chatPhone : null
+  for (const tok of webhookAllowTokens(chat)) if (allow.has(tok)) return true
+  if (phone) for (const tok of webhookAllowTokens(phone)) if (allow.has(tok)) return true
+  return false
+}
+
+function describeAllowlist(allow: Set<string> | null): string {
+  if (allow === null) return "webhook allowlist off (all events forwarded)"
+  if (allow.size === 0) return "webhook allowlist empty: no events forwarded"
+  return `webhook allowlist on (${allow.size} tokens)`
+}
+
 /** Delivers bus events to registered webhooks (HMAC-SHA256 signed, retried with backoff). */
 export class WebhookDispatcher {
   private hooks: Hook[] = []
@@ -158,12 +214,18 @@ export class WebhookDispatcher {
   constructor(
     private h: DbHandle,
     private bus: EventBus,
+    private allowJids: Set<string> | null = parseWebhookAllowJids(process.env.WEBHOOK_ALLOW_JIDS),
   ) {}
 
   async start(): Promise<void> {
     await this.reload()
+    logger.info(describeAllowlist(this.allowJids))
     this.bus.on('event', (ev: WaEvent) => {
       if (ev.adminOnly) return
+      if (!isWebhookEventAllowed(ev, this.allowJids)) {
+        logger.debug({ type: ev.type, chat: webhookEventChat(ev.data) }, 'webhook skipped (allowlist)')
+        return
+      }
       for (const hk of this.hooks) {
         if (!hk.active) continue
         if (hk.account_id && hk.account_id !== '*' && hk.account_id !== ev.account) continue

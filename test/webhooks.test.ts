@@ -3,7 +3,7 @@ import http from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { describeEvent, EventBus, maskHookHeaders, parseHookHeaders, signPayload, WebhookDispatcher } from '../src/events.js'
+import { describeEvent, EventBus, isWebhookEventAllowed, maskHookHeaders, parseHookHeaders, parseWebhookAllowJids, signPayload, WebhookDispatcher } from '../src/events.js'
 
 describe('webhook headers, written the way receivers show them', () => {
   it('a key alone, "Bearer <key>" or the whole header line', () => {
@@ -120,5 +120,93 @@ describe('delivery with the receiver key (Cursor / Grok Bot automation format)',
     const cols = (await old.db.introspection.getTables()).find((t) => t.name === 'webhooks')!.columns.map((c) => c.name)
     expect(cols).toContain('headers')
     expect(await old.db.selectFrom('webhooks').selectAll().execute()).toMatchObject([{ id: 'w1', url: 'https://example.com/h', headers: null }])
+  })
+})
+
+describe('WEBHOOK_ALLOW_JIDS allowlist', () => {
+  const mario = { chat: '393331234567@s.whatsapp.net', senderName: 'Mario', senderPhone: '+393331234567', chatPhone: '+393331234567', text: 'ciao' }
+  const group = { chat: '120363042@g.us', chatName: 'Sgarbistan', text: 'ciao' }
+
+  it('unset = no filter; empty or whitespace = forward nothing', () => {
+    expect(parseWebhookAllowJids(undefined)).toBeNull()
+    expect(isWebhookEventAllowed({ data: mario }, null)).toBe(true)
+    const empty = parseWebhookAllowJids('')
+    expect(empty).toEqual(new Set())
+    expect(isWebhookEventAllowed({ data: mario }, empty)).toBe(false)
+    expect(isWebhookEventAllowed({ data: mario }, parseWebhookAllowJids('   ,  '))).toBe(false)
+  })
+
+  it('matches a phone number or a full JID, and no other chat', () => {
+    const byPhone = parseWebhookAllowJids('+393331234567')
+    expect(isWebhookEventAllowed({ data: mario }, byPhone)).toBe(true)
+    expect(isWebhookEventAllowed({ data: group }, byPhone)).toBe(false)
+    const byJid = parseWebhookAllowJids('393331234567@s.whatsapp.net, 120363042@g.us')
+    expect(isWebhookEventAllowed({ data: mario }, byJid)).toBe(true)
+    expect(isWebhookEventAllowed({ data: group }, byJid)).toBe(true)
+    expect(isWebhookEventAllowed({ data: { chat: '971500000001@s.whatsapp.net', text: 'x' } }, byJid)).toBe(false)
+    expect(isWebhookEventAllowed({ data: { text: 'no chat' } }, byJid)).toBe(false)
+  })
+})
+
+describe('delivery skipped when the allowlist is empty, still sent for an allowed chat', () => {
+  let server: http.Server
+  let url = ''
+  const got: string[] = []
+  let h: Awaited<ReturnType<typeof import('../src/db/index.js').openDb>>
+
+  beforeAll(async () => {
+    server = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        got.push(body)
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('{}')
+      })
+    })
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()))
+    url = `http://127.0.0.1:${(server.address() as { port: number }).port}/hook`
+    const { openDb, migrate } = await import('../src/db/index.js')
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wo-allow-'))
+    h = await openDb(`sqlite://${path.join(dir, 't.db')}`)
+    await migrate(h)
+    await h.db
+      .insertInto('webhooks')
+      .values({ id: 'w1', url, events: 'message.received', account_id: '*', secret: 'whs_s', active: 1, created_at: Date.now(), headers: null })
+      .execute()
+  })
+  afterAll(() => server.close())
+
+  it('empty allowlist: no POST, even if the webhook is active', async () => {
+    got.length = 0
+    const bus = new EventBus()
+    const disp = new WebhookDispatcher(h, bus, parseWebhookAllowJids(''))
+    await disp.start()
+    bus.publish('message.received', '971500000001', { chat: '393331234567@s.whatsapp.net', text: 'ciao' })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(got.length).toBe(0)
+    expect(await h.db.selectFrom('webhook_deliveries').selectAll().execute()).toEqual([])
+  })
+
+  it('allowlist with that chat: the event is POSTed', async () => {
+    got.length = 0
+    const bus = new EventBus()
+    const disp = new WebhookDispatcher(h, bus, parseWebhookAllowJids('393331234567'))
+    await disp.start()
+    bus.publish('message.received', '971500000001', { chat: '393331234567@s.whatsapp.net', text: 'ciao' })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(got.length).toBe(1)
+    expect(JSON.parse(got[0])).toMatchObject({ type: 'message.received', data: { text: 'ciao' } })
+  })
+
+  it('Test still reaches the webhook when the allowlist is empty', async () => {
+    got.length = 0
+    const bus = new EventBus()
+    const disp = new WebhookDispatcher(h, bus, parseWebhookAllowJids(''))
+    await disp.start()
+    const r = await disp.deliverTest('w1', '971500000001')
+    expect(r).toEqual({ ok: true, status: 200, error: null })
+    expect(got.length).toBe(1)
+    expect(JSON.parse(got[0]).type).toBe('webhook.test')
   })
 })

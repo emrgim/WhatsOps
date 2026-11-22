@@ -209,6 +209,8 @@ Body: `{ id, type, account, at, context, data }` — `context` is one line in pl
 
 **Receivers with their own key** (Cursor and Grok Bot automations, Zapier, Make, n8n…): in *Key or header* paste the key (`crsr_…`, sent as `Authorization: Bearer crsr_…`) or the whole header line the receiver shows (`Authorization: Bearer …`, `X-Api-Key: …`; several lines for several headers). Keys are never shown again in full; *Key* in the list changes or removes them. API: `headers` in `POST /v1/admin/webhooks` and `PATCH /v1/admin/webhooks/{id}` (a string as above or an object; `""` removes them). *Test* sends a `webhook.test` event to that webhook only and shows the receiver's answer.
 
+Optional env `WEBHOOK_ALLOW_JIDS`: if unset, every matching event is forwarded. If set, only events whose chat is in the list (JIDs or phone numbers, comma or whitespace separated) are POSTed; an empty value forwards nothing. Messages are still stored in the database. The *Test* button is not filtered. Change the variable and restart the service to apply.
+
 ## CLI
 
 ```
