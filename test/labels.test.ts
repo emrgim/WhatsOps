@@ -12,6 +12,7 @@ const MARIO = '393330000001@s.whatsapp.net'
 const LUCA = '393330000002@s.whatsapp.net'
 const LUCA_LID = '111111111111111@lid'
 const GROUP = '120363000000000000@g.us'
+const NEWBIE = '393330000009@s.whatsapp.net'
 
 describe('labels', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wo-labels-'))
@@ -92,19 +93,27 @@ describe('labels', () => {
       },
     }
     const svc = new WaService(h, null as never, null as never)
+    await linkLabel(h, A, { labelId: '2', chat: NEWBIE }, true) // labelled on the phone, no message in WhatsOps
     const all = await svc.listChats(acc as never, {})
     expect(all.map((c) => [c.name, c.labels.map((l) => l.name)])).toEqual([
       ['Mario', ['Paid']],
       ['Luca', ['Paid']],
       ['Crew', []],
     ])
-    expect((await svc.listChats(acc as never, { label: 'Paid' })).map((c) => c.name)).toEqual(['Mario', 'Luca'])
+    const paid = await svc.listChats(acc as never, { label: 'Paid' })
+    expect(paid.map((c) => [c.jid, c.name, c.lastMessage, c.labels.map((l) => l.name)])).toEqual([
+      [MARIO, 'Mario', null, ['Paid']],
+      [LUCA, 'Luca', null, ['Paid']],
+      [NEWBIE, null, null, ['Paid']],
+    ])
+    expect((await svc.listChats(acc as never, { label: 'Paid', offset: 1, limit: 1 })).map((c) => c.jid)).toEqual([LUCA])
     expect(await svc.listChats(acc as never, { label: '1' })).toEqual([])
     const one = await svc.labels(acc as never, 'paid')
-    expect(one.label).toMatchObject({ id: '2', name: 'Paid', chats: 2 })
+    expect(one.label).toMatchObject({ id: '2', name: 'Paid', chats: 3 })
     expect(one.chats.map((c) => [c.jid, c.name, c.phone])).toEqual([
       [LUCA, 'Luca', '+393330000002'],
       [MARIO, 'Mario', '+393330000001'],
+      [NEWBIE, null, '+393330000009'],
     ])
     const first = await svc.labels(acc as never, 'Nuovo cliente')
     expect(first.messages).toEqual([{ chat: MARIO, chatName: 'Mario', id: 'M1', message: null }])

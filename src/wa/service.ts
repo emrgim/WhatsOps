@@ -94,24 +94,23 @@ export class WaService {
   async listChats(acc: WaAccount, o: { limit?: number; offset?: number; unreadOnly?: boolean; query?: string; type?: 'all' | 'groups' | 'direct'; label?: string }) {
     const labels = await listLabels(this.h, acc.id)
     let q = this.h.db.selectFrom('chats').selectAll().where('account_id', '=', acc.id)
+    // chats carrying the label (stored under the phone number or the LID), also those with no message in WhatsOps
+    let labelled: string[] | null = null
     if (o.label) {
-      // chats carrying the label (stored under the phone number or the LID)
       const l = pickLabel(labels, o.label)
-      const jids = new Set<string>()
-      for (const k of await labelLinks(this.h, acc.id, l.id)) if (!k.messageId) for (const j of acc.store.aliases(acc.store.canonical(k.chat))) jids.add(j)
-      if (!jids.size) return []
-      q = q.where('jid', 'in', [...jids])
+      labelled = [...new Set((await labelLinks(this.h, acc.id, l.id)).filter((k) => !k.messageId).map((k) => acc.store.canonical(k.chat)))]
+      if (!labelled.length) return []
+      q = q.where('jid', 'in', [...new Set(labelled.flatMap((j) => acc.store.aliases(j)))])
     }
     if (o.unreadOnly) q = q.where('unread', '>', 0)
     if (o.type === 'groups') q = q.where('is_group', '=', 1)
     if (o.type === 'direct') q = q.where('is_group', '=', 0)
     if (o.query) q = q.where('name', likeOp(this.h), `%${escLike(o.query)}%`)
-    const rows = await q
-      .orderBy(sql`coalesce(last_ts, 0)`, 'desc')
-      .limit(Math.min(o.limit ?? 30, 200))
-      .offset(o.offset ?? 0)
-      .execute()
-    const onChat = await this.chatLabels(acc, labels, rows.map((r) => r.jid))
+    const limit = Math.min(o.limit ?? 30, 200)
+    let base = q.orderBy(sql`coalesce(last_ts, 0)`, 'desc')
+    if (!labelled) base = base.limit(limit).offset(o.offset ?? 0) // a label has few chats: paged below, with the missing ones
+    const rows = await base.execute()
+    const onChat = await this.chatLabels(acc, labels, [...rows.map((r) => r.jid), ...(labelled ?? [])])
     const out = []
     for (const r of rows) {
       const last = await this.h.db
@@ -135,7 +134,15 @@ export class WaService {
         labels: onChat.get(r.jid) ?? [],
       })
     }
-    return out
+    if (!labelled) return out
+    // labelled on the phone, but without messages here (e.g. chats older than the link)
+    const have = new Set(rows.flatMap((r) => acc.store.aliases(r.jid)))
+    for (const jid of labelled) {
+      if (have.has(jid)) continue
+      const group = isGroupJid(jid)
+      out.push({ jid, name: await acc.store.nameOf(jid), phone: group ? null : acc.store.phoneOf(jid), isGroup: group, unread: 0, archived: false, pinned: false, lastMessageAt: null, lastMessage: null, labels: onChat.get(jid) ?? [] })
+    }
+    return out.slice(o.offset ?? 0, (o.offset ?? 0) + limit)
   }
 
   /** Labels on these chats (not on their messages), by chat. */
