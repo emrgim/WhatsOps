@@ -16,14 +16,30 @@ export const CARD_REFRESH_MS = 30 * 24 * 3600_000
 export const PHOTO_SIZE = 256
 const rand = (min: number, max: number) => Math.round(min + Math.random() * (max - min))
 /**
- * How slowly WhatsApp is asked (his rule: long and random, never a steady beat): 5–15 s between two
- * contacts, and after every 40–80 contacts a rest of 2–6 minutes; business profiles in batches of 25–45.
+ * How slowly WhatsApp is asked (his rule: very slow and random, never a steady beat): 20–60 s between
+ * two contacts, a rest of 10–30 minutes after every 20–40 contacts, business profiles in batches of
+ * 15–30, and at most 150–250 contacts a day (a new random quota each day).
  */
 export const PACE = {
-  gap: () => rand(5_000, 15_000),
-  restEvery: () => rand(40, 80),
-  rest: () => rand(120_000, 360_000),
-  batch: () => rand(25, 45),
+  gap: () => rand(20_000, 60_000),
+  restEvery: () => rand(20, 40),
+  rest: () => rand(600_000, 1_800_000),
+  batch: () => rand(15, 30),
+  dailyCap: () => rand(150, 250),
+}
+
+export type CardQuota = { day: string; count: number; cap: number }
+/** The local date, YYYY-MM-DD */
+export const localDay = (d = new Date()) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+/** Today's quota of contacts to check, from the saved one; a new day gets a new random quota. */
+export function quotaFor(saved: string | undefined, today: string): CardQuota {
+  try {
+    const q = JSON.parse(saved ?? '') as CardQuota
+    if (q?.day === today && Number.isFinite(q.count) && Number.isFinite(q.cap)) return q
+  } catch {
+    // no quota saved yet
+  }
+  return { day: today, count: 0, cap: PACE.dailyCap() }
 }
 
 export type CardContact = { jid: string; name: string | null; notify: string | null; verifiedName: string | null; photo: string | null; websites: string[] }
@@ -237,7 +253,7 @@ async function fetchPhoto(sock: CardSock, jid: string, get: typeof fetch): Promi
  * (gapMs fixes the wait instead, for tests). Stops at once when WhatsApp says to slow down (limited) or
  * the connection goes (alive).
  */
-export async function collectCards(d: { h: DbHandle; accountId: string; meJid: string; sock: CardSock; alive: () => boolean; fetch?: typeof fetch; gapMs?: number; batch?: number }): Promise<{ checked: number; limited: boolean }> {
+export async function collectCards(d: { h: DbHandle; accountId: string; meJid: string; sock: CardSock; alive: () => boolean; fetch?: typeof fetch; gapMs?: number; batch?: number; budget?: number; onChecked?: () => Promise<void> }): Promise<{ checked: number; limited: boolean }> {
   const get = d.fetch ?? fetch
   const paced = d.gapMs === undefined
   let checked = 0
@@ -245,7 +261,9 @@ export async function collectCards(d: { h: DbHandle; accountId: string; meJid: s
   const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
   for (;;) {
     if (!d.alive()) return { checked, limited: false }
-    const jids = await pendingCards(d.h, d.accountId, d.meJid, d.batch ?? PACE.batch())
+    const left = d.budget === undefined ? Infinity : d.budget - checked
+    if (left <= 0) return { checked, limited: false }
+    const jids = await pendingCards(d.h, d.accountId, d.meJid, Math.min(d.batch ?? PACE.batch(), left))
     if (!jids.length) return { checked, limited: false }
     let biz: Map<string, { websites: string[] }>
     try {
@@ -270,6 +288,8 @@ export async function collectCards(d: { h: DbHandle; accountId: string; meJid: s
         ['account_id', 'jid'],
       )
       checked++
+      await d.onChecked?.()
+      if (d.budget !== undefined && checked >= d.budget) return { checked, limited: false }
       if (!paced) {
         if (d.gapMs) await wait(d.gapMs)
       } else if (checked >= restAt) {

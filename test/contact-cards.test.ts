@@ -4,7 +4,7 @@ import path from 'node:path'
 import sharp from 'sharp'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { migrate, openDb, type DbHandle } from '../src/db/index.js'
-import { cardProgress, collectCards, PACE, parseBusinessProfiles, vcard, vcardFile } from '../src/wa/contact-cards.js'
+import { cardProgress, collectCards, PACE, parseBusinessProfiles, quotaFor, vcard, vcardFile } from '../src/wa/contact-cards.js'
 import { WaService } from '../src/wa/service.js'
 
 const A = '971500000001'
@@ -64,17 +64,31 @@ describe('vCard text', () => {
 })
 
 describe('pace', () => {
-  it('asks WhatsApp slowly and never at a steady beat', () => {
+  it('asks WhatsApp very slowly and never at a steady beat', () => {
     const gaps = Array.from({ length: 500 }, PACE.gap)
-    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(5_000)
-    expect(Math.max(...gaps)).toBeLessThanOrEqual(15_000)
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(20_000)
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(60_000)
     expect(new Set(gaps).size).toBeGreaterThan(100)
     const rests = Array.from({ length: 200 }, PACE.rest)
-    expect(Math.min(...rests)).toBeGreaterThanOrEqual(120_000)
-    expect(Math.max(...rests)).toBeLessThanOrEqual(360_000)
+    expect(Math.min(...rests)).toBeGreaterThanOrEqual(600_000)
+    expect(Math.max(...rests)).toBeLessThanOrEqual(1_800_000)
     const every = Array.from({ length: 200 }, PACE.restEvery)
-    expect(Math.min(...every)).toBeGreaterThanOrEqual(40)
-    expect(Math.max(...every)).toBeLessThanOrEqual(80)
+    expect(Math.min(...every)).toBeGreaterThanOrEqual(20)
+    expect(Math.max(...every)).toBeLessThanOrEqual(40)
+    const caps = Array.from({ length: 200 }, PACE.dailyCap)
+    expect(Math.min(...caps)).toBeGreaterThanOrEqual(150)
+    expect(Math.max(...caps)).toBeLessThanOrEqual(250)
+  })
+
+  it('a daily quota: kept during the day, a new random one the next day', () => {
+    const used = JSON.stringify({ day: '2026-11-23', count: 0, cap: 0 })
+    expect(quotaFor(used, '2026-11-23')).toEqual({ day: '2026-11-23', count: 0, cap: 0 })
+    const next = quotaFor(used, '2026-11-24')
+    expect(next.day).toBe('2026-11-24')
+    expect(next.count).toBe(0)
+    expect(next.cap).toBeGreaterThanOrEqual(150)
+    expect(quotaFor(undefined, '2026-11-24').count).toBe(0)
+    expect(quotaFor('not json', '2026-11-24').day).toBe('2026-11-24')
   })
 })
 
@@ -145,6 +159,14 @@ describe('contact cards from the database', () => {
     expect(r.limited).toBe(true)
     const p = await cardProgress(h, A, ME)
     expect(p.done).toBeLessThan(3)
+  })
+
+  it('stops when the day budget is used, and says each contact as it is done', async () => {
+    const { sock } = fakeSock()
+    let told = 0
+    const r = await collectCards({ h, accountId: A, meJid: ME, sock: sock as never, alive: () => true, fetch: fetchImg, gapMs: 0, budget: 1, onChecked: async () => { told++ } })
+    expect(r).toEqual({ checked: 1, limited: false })
+    expect(told).toBe(1)
   })
 
   it('fetches each photo and the business websites once, then everything is ready', async () => {

@@ -19,7 +19,7 @@ import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
 import { attachProbe, captureLocationKey, PROBE_ON, probeActiveShares, probeSubscribe } from './live-location-probe.js'
 import { cleanName, isBuiltInFilter, linkLabel, listLabels, saveLabel } from './labels.js'
-import { cardProgress, collectCards } from './contact-cards.js'
+import { cardProgress, collectCards, localDay, quotaFor } from './contact-cards.js'
 import { recordStatusReaction, recordStatusReceipt, saveStatus, STATUS_JID, statusFromMessage, statusReactionFromMessage } from './statuses.js'
 import { audioInfo, WaStore } from './store.js'
 
@@ -594,12 +594,28 @@ export class WaAccount {
       while (alive()) {
         const me = this.row.me_jid
         if (!me) break
-        const before = await cardProgress(this.ctx.h, this.row.id, me)
-        if (before.done < before.total) logger.info({ account: this.row.id, ...before }, 'contact cards: checking photos and websites')
-        const r = await collectCards({ h: this.ctx.h, accountId: this.row.id, meJid: me, sock: this.sock as never, alive })
-        if (r.checked) {
-          const after = await cardProgress(this.ctx.h, this.row.id, me)
-          logger.info({ account: this.row.id, checked: r.checked, limited: r.limited, ...after }, after.done >= after.total ? 'contact cards ready' : 'contact cards: paused')
+        // a daily quota: once used, nothing more is asked until tomorrow
+        const key = `cards_quota:${this.row.id}`
+        const q = quotaFor(await getSetting(this.ctx.h, key), localDay())
+        if (q.count < q.cap) {
+          const before = await cardProgress(this.ctx.h, this.row.id, me)
+          if (before.done < before.total) logger.info({ account: this.row.id, ...before, today: q.count, quota: q.cap }, 'contact cards: checking photos and websites')
+          const r = await collectCards({
+            h: this.ctx.h,
+            accountId: this.row.id,
+            meJid: me,
+            sock: this.sock as never,
+            alive,
+            budget: q.cap - q.count,
+            onChecked: async () => {
+              q.count++
+              await setSetting(this.ctx.h, key, JSON.stringify(q))
+            },
+          })
+          if (r.checked) {
+            const after = await cardProgress(this.ctx.h, this.row.id, me)
+            logger.info({ account: this.row.id, checked: r.checked, limited: r.limited, ...after, today: q.count, quota: q.cap }, after.done >= after.total ? 'contact cards ready' : 'contact cards: paused')
+          }
         }
         await sleep(15 * 60_000)
       }
