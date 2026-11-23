@@ -4,7 +4,7 @@ import path from 'node:path'
 import sharp from 'sharp'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { migrate, openDb, type DbHandle } from '../src/db/index.js'
-import { cardProgress, collectCards, parseBusinessProfiles, vcard, vcardFile } from '../src/wa/contact-cards.js'
+import { cardProgress, collectCards, PACE, parseBusinessProfiles, vcard, vcardFile } from '../src/wa/contact-cards.js'
 import { WaService } from '../src/wa/service.js'
 
 const A = '971500000001'
@@ -60,6 +60,21 @@ describe('vCard text', () => {
     ])
     expect(f.match(/BEGIN:VCARD/g)).toHaveLength(2)
     expect(f.indexOf('Anna Bianchi')).toBeLessThan(f.indexOf('Zeno Rossi'))
+  })
+})
+
+describe('pace', () => {
+  it('asks WhatsApp slowly and never at a steady beat', () => {
+    const gaps = Array.from({ length: 500 }, PACE.gap)
+    expect(Math.min(...gaps)).toBeGreaterThanOrEqual(5_000)
+    expect(Math.max(...gaps)).toBeLessThanOrEqual(15_000)
+    expect(new Set(gaps).size).toBeGreaterThan(100)
+    const rests = Array.from({ length: 200 }, PACE.rest)
+    expect(Math.min(...rests)).toBeGreaterThanOrEqual(120_000)
+    expect(Math.max(...rests)).toBeLessThanOrEqual(360_000)
+    const every = Array.from({ length: 200 }, PACE.restEvery)
+    expect(Math.min(...every)).toBeGreaterThanOrEqual(40)
+    expect(Math.max(...every)).toBeLessThanOrEqual(80)
   })
 })
 

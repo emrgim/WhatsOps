@@ -14,8 +14,17 @@ import { bareJid, userOf } from '../util.js'
 export const CARD_REFRESH_MS = 30 * 24 * 3600_000
 /** side of the square photo kept for a card (px): sharp enough for a contact, small enough for thousands */
 export const PHOTO_SIZE = 256
-const BATCH = 40
-const GAP_MS = 1200
+const rand = (min: number, max: number) => Math.round(min + Math.random() * (max - min))
+/**
+ * How slowly WhatsApp is asked (his rule: long and random, never a steady beat): 5–15 s between two
+ * contacts, and after every 40–80 contacts a rest of 2–6 minutes; business profiles in batches of 25–45.
+ */
+export const PACE = {
+  gap: () => rand(5_000, 15_000),
+  restEvery: () => rand(40, 80),
+  rest: () => rand(120_000, 360_000),
+  batch: () => rand(25, 45),
+}
 
 export type CardContact = { jid: string; name: string | null; notify: string | null; verifiedName: string | null; photo: string | null; websites: string[] }
 type CardSock = {
@@ -224,16 +233,19 @@ async function fetchPhoto(sock: CardSock, jid: string, get: typeof fetch): Promi
 }
 
 /**
- * Check the contacts that still need it: business websites in batches, then each photo, one contact
- * every gapMs. Stops at once when WhatsApp says to slow down (limited) or the connection goes (alive).
+ * Check the contacts that still need it: business websites in batches, then each photo, at the PACE
+ * (gapMs fixes the wait instead, for tests). Stops at once when WhatsApp says to slow down (limited) or
+ * the connection goes (alive).
  */
 export async function collectCards(d: { h: DbHandle; accountId: string; meJid: string; sock: CardSock; alive: () => boolean; fetch?: typeof fetch; gapMs?: number; batch?: number }): Promise<{ checked: number; limited: boolean }> {
   const get = d.fetch ?? fetch
-  const gap = d.gapMs ?? GAP_MS
+  const paced = d.gapMs === undefined
   let checked = 0
+  let restAt = PACE.restEvery()
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms))
   for (;;) {
     if (!d.alive()) return { checked, limited: false }
-    const jids = await pendingCards(d.h, d.accountId, d.meJid, d.batch ?? BATCH)
+    const jids = await pendingCards(d.h, d.accountId, d.meJid, d.batch ?? PACE.batch())
     if (!jids.length) return { checked, limited: false }
     let biz: Map<string, { websites: string[] }>
     try {
@@ -258,7 +270,12 @@ export async function collectCards(d: { h: DbHandle; accountId: string; meJid: s
         ['account_id', 'jid'],
       )
       checked++
-      if (gap) await new Promise((r) => setTimeout(r, gap))
+      if (!paced) {
+        if (d.gapMs) await wait(d.gapMs)
+      } else if (checked >= restAt) {
+        restAt = checked + PACE.restEvery()
+        await wait(PACE.rest())
+      } else await wait(PACE.gap())
     }
   }
 }
