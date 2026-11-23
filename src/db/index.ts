@@ -273,6 +273,12 @@ export const TABLES: TableDef[] = [
     cols: [['account_id', 'id', 'notnull'], ['label_id', 'short', 'notnull'], ['chat_jid', 'key', 'notnull'], ['msg_id', 'key', 'notnull'], ['updated_at', 'big']],
     pk: ['account_id', 'label_id', 'chat_jid', 'msg_id'],
   },
+  // what a contact card (.vcf) needs that WhatsApp does not send by itself: photo, business websites (src/wa/contact-cards.ts)
+  {
+    name: 'contact_cards',
+    cols: [['account_id', 'id', 'notnull'], ['jid', 'key', 'notnull'], ['photo', 'long'], ['websites', 'long'], ['business', 'int'], ['state', 'short'], ['checked_at', 'big']],
+    pk: ['account_id', 'jid'],
+  },
   // my statuses (stories) and who got / opened each of them (src/wa/statuses.ts)
   {
     name: 'statuses',

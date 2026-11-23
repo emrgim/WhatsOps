@@ -19,6 +19,7 @@ import { AppError, bareJid, digits, sleep, userOf } from '../util.js'
 import { useDbAuthState, wipeAuth } from './auth.js'
 import { attachProbe, captureLocationKey, PROBE_ON, probeActiveShares, probeSubscribe } from './live-location-probe.js'
 import { cleanName, isBuiltInFilter, linkLabel, listLabels, saveLabel } from './labels.js'
+import { cardProgress, collectCards } from './contact-cards.js'
 import { recordStatusReaction, recordStatusReceipt, saveStatus, STATUS_JID, statusFromMessage, statusReactionFromMessage } from './statuses.js'
 import { audioInfo, WaStore } from './store.js'
 
@@ -433,6 +434,7 @@ export class WaAccount {
       setTimeout(() => {
         if (gen === this.generation && this.state === 'open') void this.readLabelsOnce()
       }, 12_000).unref()
+      setTimeout(() => void this.collectContactCards(gen), 60_000).unref()
     }
     if (u.connection === 'close') {
       if (gen !== this.generation) return
@@ -578,6 +580,36 @@ export class WaAccount {
 
   // ------------------------------------------------------------------ labels
   /** Labels created/changed, and put on or taken off chats and messages (WhatsApp app state). */
+  /**
+   * Contact cards (.vcf): photo and business website of every contact, asked once each, slowly, while
+   * connected; then again every 15 minutes for new contacts. A "slow down" from WhatsApp waits 15 minutes.
+   */
+  private cardsGen = -1
+  private async collectContactCards(gen: number): Promise<void> {
+    if (this.cardsGen === gen) return
+    this.cardsGen = gen
+    // a loop of an older connection stops by itself
+    const alive = () => gen === this.generation && this.cardsGen === gen && this.state === 'open' && !!this.sock
+    try {
+      while (alive()) {
+        const me = this.row.me_jid
+        if (!me) break
+        const before = await cardProgress(this.ctx.h, this.row.id, me)
+        if (before.done < before.total) logger.info({ account: this.row.id, ...before }, 'contact cards: checking photos and websites')
+        const r = await collectCards({ h: this.ctx.h, accountId: this.row.id, meJid: me, sock: this.sock as never, alive })
+        if (r.checked) {
+          const after = await cardProgress(this.ctx.h, this.row.id, me)
+          logger.info({ account: this.row.id, checked: r.checked, limited: r.limited, ...after }, after.done >= after.total ? 'contact cards ready' : 'contact cards: paused')
+        }
+        await sleep(15 * 60_000)
+      }
+    } catch (e) {
+      logger.warn({ account: this.row.id, err: String(e) }, 'contact cards: stopped')
+    } finally {
+      if (this.cardsGen === gen) this.cardsGen = -1
+    }
+  }
+
   /**
    * Somebody got or opened one of my statuses: WhatsApp tells every device of mine (WhatsApp Web shows
    * the viewers the same way). Kept per person; status.view the first time each one opens it.

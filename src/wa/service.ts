@@ -8,6 +8,7 @@ import { AppError, bareJid, digits, isGroupJid, toJid, userOf } from '../util.js
 import type { WaAccount } from './account.js'
 import type { AccountManager } from './manager.js'
 import { labelLinks, listLabels, pickLabel, type Label } from './labels.js'
+import { cardProgress, loadCards, vcardFile } from './contact-cards.js'
 import { loadStatuses, saveStatus, STATUS_LIFE_MS, statusReplyOf } from './statuses.js'
 import { parseMessage, type MessageRow } from './store.js'
 
@@ -664,6 +665,21 @@ export class WaService {
 
   async stats(acc: WaAccount) {
     const count = async (t: string) => Number((await this.h.db.selectFrom(t).select((eb) => eb.fn.countAll().as('n')).where('account_id', '=', acc.id).executeTakeFirst())?.n ?? 0)
-    return { messages: await count('messages'), chats: await count('chats'), contacts: await count('contacts'), groups: await count('wa_groups') }
+    const cards = acc.row.me_jid ? await cardProgress(this.h, acc.id, acc.row.me_jid) : { total: 0, done: 0, addressBook: 0 }
+    return { messages: await count('messages'), chats: await count('chats'), contacts: await count('contacts'), groups: await count('wa_groups'), cards: { ...cards, ready: cards.total > 0 && cards.done >= cards.total } }
+  }
+
+  /**
+   * Every contact of the number as one .vcf file (macOS Contacts / iPhone), made from the database only:
+   * name and surname, WhatsApp number, profile photo, website. Only when every contact has been checked.
+   */
+  async contactsVcf(acc: WaAccount, q: { only?: 'addressbook' }): Promise<{ filename: string; body: string; count: number }> {
+    const me = acc.row.me_jid
+    if (!me) throw new AppError('NOT_LINKED', 'This number is not linked yet', 409)
+    const p = await cardProgress(this.h, acc.id, me)
+    if (!p.total || p.done < p.total) throw new AppError('CARDS_NOT_READY', 'The contact cards are not ready yet: {0} of {1}', 409, [p.done, p.total])
+    const cards = await loadCards(this.h, acc.id, me, q.only)
+    const phone = userOf(me).replace(/\D/g, '')
+    return { filename: `WhatsOps-${phone}-${q.only === 'addressbook' ? 'address-book' : 'contacts'}.vcf`, body: vcardFile(cards), count: cards.length }
   }
 }

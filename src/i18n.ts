@@ -175,6 +175,8 @@ const IT: Record<string, string> = {
   'List labels': 'Elenca le etichette',
   'Label a chat': 'Etichetta una chat',
   'Who saw and liked my statuses': 'Chi ha visto e messo like ai miei stati',
+  'This number is not linked yet': 'Questo numero non è ancora collegato',
+  'The contact cards are not ready yet: {0} of {1}': 'Le schede dei contatti non sono ancora pronte: {0} di {1}',
   'My WhatsApp statuses (stories) and who saw and liked them: for each status who opened it and when, who liked it (likedBy: the contact and the emoji), the replies it got (an emoji or a text sent from the status) and who of its audience did not open it yet; people = who saw and liked how many of the statuses listed (the whole story). Default: the statuses still visible (last 24 hours). Views and likes are known for statuses posted since WhatsOps keeps them; the phone shows them too.': 'I miei stati WhatsApp (storie) e chi li ha visti e messo like: per ogni stato chi l’ha aperto e quando, chi ha messo like (likedBy: il contatto e l’emoji), le risposte ricevute (un’emoji o un testo mandati dallo stato) e chi del suo pubblico non l’ha ancora aperto; people = chi ha visto e messo like a quanti degli stati elencati (tutta la storia). Di default: gli stati ancora visibili (ultime 24 ore). Visualizzazioni e like sono noti per gli stati pubblicati da quando WhatsOps li conserva; li mostra anche il telefono.',
   'One status only (id from whatsapp_post_status or from this list)': 'Un solo stato (id da whatsapp_post_status o da questo elenco)',
   'Statuses posted since this ISO date (default: the last 24 hours)': 'Stati pubblicati da questa data ISO (di default: le ultime 24 ore)',

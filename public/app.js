@@ -102,6 +102,25 @@ async function loadOverview() {
   fillAccountSelects()
 }
 
+// contact cards (.vcf) of a number: the download comes when every contact has its photo and website in the database
+function cardsReady(a) {
+  const c = a.stats?.cards
+  const history = a.history && a.history.progress != null && a.history.progress < 100
+  return !!c && c.ready && !history
+}
+function cardsButtons(a) {
+  const c = a.stats?.cards
+  if (!a.me || !c || !c.total) return ''
+  if (!cardsReady(a)) return `<button class="small ghost" disabled title="${esc(t('acc.cardsHint'))}">📇 ${esc(t('acc.cardsPrep', num(c.done), num(c.total)))}</button>`
+  return `<button class="small" data-act="vcf" title="${esc(t('acc.cardsHint'))}">📇 ${esc(t('acc.vcfAll', num(c.total)))}</button>${c.addressBook ? `<button class="small ghost" data-act="vcf-book">📇 ${esc(t('acc.vcfBook', num(c.addressBook)))}</button>` : ''}`
+}
+let cardsTimer = null
+function followCards() {
+  // while cards are being prepared the counter moves: read it again every 20 s
+  if (cardsTimer || !state.accounts.some((a) => a.me && a.stats?.cards?.total && !cardsReady(a))) return
+  cardsTimer = setTimeout(() => { cardsTimer = null; if (!document.hidden) loadOverview().catch(() => {}); else followCards() }, 20_000)
+}
+
 function renderAccounts() {
   const el = $('#accounts')
   if (!state.accounts.length) {
@@ -125,10 +144,12 @@ function renderAccounts() {
         ${!a.default ? `<button class="small ghost" data-act="default">${esc(t('acc.makeDefault'))}</button>` : ''}
         <button class="small ghost" data-act="toggle">${esc(t(a.enabled ? 'acc.pause' : 'acc.resume'))}</button>
         <button class="small ghost" data-act="import">${esc(t('acc.import'))}</button>
+        ${cardsButtons(a)}
         ${linked ? `<button class="small danger" data-act="logout">${esc(t('acc.logout'))}</button>` : ''}
         <button class="small danger" data-act="delete">${esc(t('acc.delete'))}</button>
       </div></div>`
   }).join('')
+  followCards()
 }
 
 $('#accounts').addEventListener('click', run(async (e) => {
@@ -140,6 +161,8 @@ $('#accounts').addEventListener('click', run(async (e) => {
     case 'pair': return openPair(id)
     case 'profile': return openProfile(id)
     case 'restart': await api('POST', `/v1/accounts/${id}/restart`); toast(t('acc.reconnecting')); break
+    case 'vcf': await fetchFile(`/v1/accounts/${encodeURIComponent(id)}/contacts.vcf`, b, 'contacts.vcf'); return
+    case 'vcf-book': await fetchFile(`/v1/accounts/${encodeURIComponent(id)}/contacts.vcf?only=addressbook`, b, 'address-book.vcf'); return
     case 'default': await api('PATCH', `/v1/accounts/${id}`, { isDefault: true }); break
     case 'toggle': await api('PATCH', `/v1/accounts/${id}`, { enabled: !a.enabled }); break
     case 'logout':
@@ -1382,14 +1405,15 @@ function bakRender(c) {
 }
 async function loadBackup() { bakRender(await api('GET', '/v1/admin/backup')) }
 // downloads go through fetch so an error shows here instead of an error page
-async function bakFetchFile(url, btn) {
+const bakFetchFile = (url, btn) => fetchFile(url, btn, 'whatsops-backup.whatsops')
+async function fetchFile(url, btn, fallbackName) {
   const label = btn.textContent
   btn.disabled = true
   btn.textContent = t('bak.preparing')
   try {
     const r = await fetch(url, { credentials: 'same-origin', headers: { 'accept-language': WA_LANG } })
     if (!r.ok) { let j = null; try { j = await r.json() } catch {} ; throw new Error(j?.error?.message || `HTTP ${r.status}`) }
-    const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || 'whatsops-backup.whatsops'
+    const name = (r.headers.get('content-disposition') || '').match(/filename="([^"]+)"/)?.[1] || fallbackName
     const a = document.createElement('a')
     a.href = URL.createObjectURL(await r.blob())
     a.download = name

@@ -326,6 +326,28 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     accountFor(app, P(req), req.params.id).editProfile({ photo: null }),
   )
 
+  f.get(
+    '/v1/accounts/:id/contacts.vcf',
+    {
+      preHandler: guard('read'),
+      schema: {
+        ...tags('Accounts'),
+        summary: 'Every contact of the number as one .vcf file (macOS Contacts, iPhone), from the database: name and surname, number, profile photo, website',
+        params: z.object({ id: z.string() }),
+        querystring: z.object({ only: z.enum(['addressbook']).optional() }),
+      },
+    },
+    async (req, reply) => {
+      const r = await app.svc.contactsVcf(accountFor(app, P(req), req.params.id), { only: req.query.only })
+      return reply
+        .type('text/vcard; charset=utf-8')
+        .header('content-disposition', `attachment; filename="${r.filename}"`)
+        .header('x-wa-cards', String(r.count))
+        .header('cache-control', 'no-store')
+        .send(r.body)
+    },
+  )
+
   f.get('/v1/accounts/:id/stats', { preHandler: guard('read'), schema: { ...tags('Accounts'), summary: 'Stored data counts', params: z.object({ id: z.string() }) } }, async (req) =>
     app.svc.stats(accountFor(app, P(req), req.params.id)),
   )

@@ -4,7 +4,7 @@ import { AppError, slugify, userOf } from '../util.js'
 import { WaAccount, type AccountRow, type Ctx } from './account.js'
 import { wipeAuth } from './auth.js'
 
-const DATA_TABLES = ['auth_keys', 'auth_creds', 'messages', 'chats', 'contacts', 'lid_map', 'wa_groups', 'outbox', 'profiles', 'labels', 'label_links', 'statuses', 'status_views']
+const DATA_TABLES = ['auth_keys', 'auth_creds', 'messages', 'chats', 'contacts', 'lid_map', 'wa_groups', 'outbox', 'profiles', 'labels', 'label_links', 'statuses', 'status_views', 'contact_cards']
 /** the id of a linked number is its phone number (digits) */
 const phoneId = (r: AccountRow): string | null => (r.me_jid ? userOf(r.me_jid).replace(/\D+/g, '') || null : null)
 
